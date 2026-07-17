@@ -1,65 +1,78 @@
-from config import SYMBOLS, TIMEFRAME, CANDLE_LIMIT
-from history import get_history
-from analysis.signal import generate_signal
+from config import SYMBOLS
+from logger import logger
+
 from telegram import send_message
 from notify import send_notification
-from logger import logger
+
+from analysis.timeframe import (
+    analyze_timeframes,
+    final_decision,
+)
 
 last_alerts = {}
 
 
 def scan_symbol(symbol):
+
     try:
+
         logger.info(f"Scanning {symbol}")
 
-        df = get_history(
-            symbol=symbol,
-            resolution=TIMEFRAME,
-            limit=CANDLE_LIMIT
-        )
+        results = analyze_timeframes(symbol)
 
-        if df.empty:
-            logger.warning(f"{symbol}: No candle data received.")
-            return
+        decision = final_decision(results)
 
-        result = generate_signal(df)
+        signal = decision["decision"]
 
-        signal = result["signal"]
+        score = decision["score"]
 
         logger.info(
-            f"{symbol} | {signal} | Score={result['score']}"
+            f"{symbol} | {signal} | Score={score}"
         )
 
         if signal == "WAIT":
+
+            logger.info(
+                f"{symbol}: Waiting..."
+            )
+
             return
 
         if last_alerts.get(symbol) == signal:
-            logger.info(f"{symbol}: Duplicate signal skipped.")
+
+            logger.info(
+                f"{symbol}: Duplicate Signal Skipped."
+            )
+
             return
 
         last_alerts[symbol] = signal
 
         message = (
-            f"📊 NAKSHATRA AI v3.5\n\n"
+            "📊 NAKSHATRA AI v4\n\n"
+
             f"Symbol : {symbol}\n"
-            f"Signal : {signal}\n"
-            f"Price : {result['price']}\n"
-            f"Score : {result['score']}\n\n"
-            f"EMA9 : {result['ema9']}\n"
-            f"EMA21 : {result['ema21']}\n"
-            f"RSI : {result['rsi']}\n"
-            f"ADX : {result['adx']}\n"
-            f"ATR : {result['atr']}\n\n"
-            f"Reasons:\n"
-            + "\n".join(f"• {reason}" for reason in result["reasons"])
+            f"Decision : {signal}\n"
+            f"Score : {score}\n\n"
+
+            "Multi Timeframe\n"
+
+            f"5m  : {results['5m']['signal']} ({results['5m']['score']})\n"
+            f"15m : {results['15m']['signal']} ({results['15m']['score']})\n"
+            f"1h  : {results['1h']['signal']} ({results['1h']['score']})\n"
+            f"4h  : {results['4h']['signal']} ({results['4h']['score']})"
         )
 
         tg = send_message(message)
 
         if tg:
-            logger.info(f"{symbol}: Telegram sent.")
+            logger.info(
+                f"{symbol}: Telegram Sent"
+            )
         else:
-            logger.warning(f"{symbol}: Telegram failed.")
+            logger.warning(
+                f"{symbol}: Telegram Failed"
+            )
 
         ntfy = send_notification(
             f"{symbol} {signal}",
@@ -67,20 +80,32 @@ def scan_symbol(symbol):
         )
 
         if ntfy:
-            logger.info(f"{symbol}: ntfy sent.")
+            logger.info(
+                f"{symbol}: NTFY Sent"
+            )
         else:
-            logger.warning(f"{symbol}: ntfy failed.")
+            logger.warning(
+                f"{symbol}: NTFY Failed"
+            )
 
     except Exception as e:
-        logger.exception(f"{symbol} Scan Error: {e}")
+
+        logger.exception(
+            f"{symbol} Scan Error : {e}"
+        )
 
 
 def market_scan():
-    logger.info("===================================")
-    logger.info("NAKSHATRA AI Market Scan Started")
-    logger.info("===================================")
+
+    logger.info("================================")
+    logger.info("NAKSHATRA AI v4")
+    logger.info("Market Scan Started")
+    logger.info("================================")
 
     for symbol in SYMBOLS:
+
         scan_symbol(symbol)
 
+    logger.info("================================")
     logger.info("Market Scan Finished")
+    logger.info("================================")
