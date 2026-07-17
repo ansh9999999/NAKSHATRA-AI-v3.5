@@ -1,6 +1,7 @@
 from analysis.indicators import ema, rsi, macd, atr
 from analysis.adx import adx
 from analysis.market_structure import analyze_market_structure
+from analysis.volume import analyze_volume
 
 
 def generate_signal(df):
@@ -34,9 +35,12 @@ def generate_signal(df):
 
     structure = analyze_market_structure(df)
 
-    score = structure["score"]
+    volume = analyze_volume(df)
+
+    score = structure["score"] + volume["score"]
 
     reasons = structure["reasons"].copy()
+    reasons.extend(volume["reasons"])
 
     # EMA
     if ema9 > ema21:
@@ -99,8 +103,14 @@ def generate_signal(df):
         "rsi": round(float(rsi_value), 2),
         "adx": round(float(adx_value), 2),
         "atr": round(float(atr_value), 2),
+
         "trend": structure["trend"],
         "bos": structure["bos"],
         "choch": structure["choch"],
+
+        "volume_status": volume["status"],
+        "current_volume": volume["current_volume"],
+        "average_volume": volume["average_volume"],
+
         "reasons": reasons
     }
