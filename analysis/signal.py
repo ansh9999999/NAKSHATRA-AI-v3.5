@@ -2,6 +2,7 @@ from analysis.indicators import ema, rsi, macd, atr
 from analysis.adx import adx
 from analysis.market_structure import analyze_market_structure
 from analysis.volume import analyze_volume
+from analysis.liquidity import analyze_liquidity
 
 
 def generate_signal(df):
@@ -37,10 +38,19 @@ def generate_signal(df):
 
     volume = analyze_volume(df)
 
-    score = structure["score"] + volume["score"]
+    liquidity = analyze_liquidity(df)
 
-    reasons = structure["reasons"].copy()
+    score = (
+        structure["score"]
+        + volume["score"]
+        + liquidity["score"]
+    )
+
+    reasons = []
+
+    reasons.extend(structure["reasons"])
     reasons.extend(volume["reasons"])
+    reasons.extend(liquidity["reasons"])
 
     # EMA
     if ema9 > ema21:
@@ -78,39 +88,57 @@ def generate_signal(df):
         score += 5
         reasons.append("Healthy Volatility")
 
-    # Final Decision
-    if score >= 60:
+    if score >= 80:
         signal = "STRONG BUY"
 
-    elif score >= 40:
+    elif score >= 50:
         signal = "BUY"
 
-    elif score <= -60:
+    elif score <= -80:
         signal = "STRONG SELL"
 
-    elif score <= -40:
+    elif score <= -50:
         signal = "SELL"
 
     else:
         signal = "WAIT"
 
     return {
+
         "signal": signal,
+
         "score": score,
-        "price": round(price, 2),
-        "ema9": round(float(ema9), 2),
-        "ema21": round(float(ema21), 2),
-        "rsi": round(float(rsi_value), 2),
-        "adx": round(float(adx_value), 2),
-        "atr": round(float(atr_value), 2),
+
+        "price": round(price,2),
+
+        "ema9": round(float(ema9),2),
+
+        "ema21": round(float(ema21),2),
+
+        "rsi": round(float(rsi_value),2),
+
+        "adx": round(float(adx_value),2),
+
+        "atr": round(float(atr_value),2),
 
         "trend": structure["trend"],
+
         "bos": structure["bos"],
+
         "choch": structure["choch"],
 
         "volume_status": volume["status"],
+
         "current_volume": volume["current_volume"],
+
         "average_volume": volume["average_volume"],
 
+        "liquidity": liquidity["status"],
+
+        "highest_high": liquidity["highest_high"],
+
+        "lowest_low": liquidity["lowest_low"],
+
         "reasons": reasons
-    }
+
+        }
