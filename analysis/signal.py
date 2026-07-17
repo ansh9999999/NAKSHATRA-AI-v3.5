@@ -1,4 +1,5 @@
-from analysis.indicators import ema, rsi, macd
+from analysis.indicators import ema, rsi, macd, atr
+from analysis.adx import adx
 
 
 def generate_signal(df):
@@ -10,6 +11,10 @@ def generate_signal(df):
         }
 
     close = df["close"]
+    high = df["high"]
+    low = df["low"]
+
+    price = float(close.iloc[-1])
 
     ema9 = ema(close, 9).iloc[-1]
     ema21 = ema(close, 21).iloc[-1]
@@ -20,6 +25,9 @@ def generate_signal(df):
 
     macd_value = macd_line.iloc[-1]
     signal_value = signal_line.iloc[-1]
+
+    atr_value = atr(high, low, close).iloc[-1]
+    adx_value = adx(high, low, close).iloc[-1]
 
     score = 0
     reasons = []
@@ -33,10 +41,10 @@ def generate_signal(df):
         reasons.append("EMA Bearish")
 
     # RSI
-    if 58 <= rsi_value <= 72:
+    if 55 <= rsi_value <= 70:
         score += 15
         reasons.append("RSI Bullish")
-    elif 28 <= rsi_value <= 42:
+    elif 30 <= rsi_value <= 45:
         score -= 15
         reasons.append("RSI Bearish")
 
@@ -48,6 +56,18 @@ def generate_signal(df):
         score -= 15
         reasons.append("MACD Bearish")
 
+    # ADX (trend strength)
+    if adx_value >= 25:
+        score += 10
+        reasons.append("Strong Trend (ADX)")
+    else:
+        reasons.append("Weak Trend")
+
+    # ATR (volatility)
+    if atr_value > 0:
+        score += 5
+        reasons.append("ATR Normal")
+
     if score >= 40:
         signal = "BUY"
     elif score <= -40:
@@ -58,9 +78,11 @@ def generate_signal(df):
     return {
         "signal": signal,
         "score": score,
-        "price": float(close.iloc[-1]),
+        "price": round(price, 2),
         "ema9": round(float(ema9), 2),
         "ema21": round(float(ema21), 2),
         "rsi": round(float(rsi_value), 2),
+        "adx": round(float(adx_value), 2),
+        "atr": round(float(atr_value), 2),
         "reasons": reasons
     }
