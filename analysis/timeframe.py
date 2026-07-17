@@ -12,7 +12,7 @@ TIMEFRAMES = [
 
 def analyze_timeframes(symbol):
 
-    result = {}
+    results = {}
 
     for tf in TIMEFRAMES:
 
@@ -24,19 +24,28 @@ def analyze_timeframes(symbol):
                 limit=200
             )
 
+            if df.empty:
+
+                results[tf] = {
+                    "signal": "WAIT",
+                    "score": 0
+                }
+
+                continue
+
             signal = generate_signal(df)
 
-            result[tf] = signal
+            results[tf] = signal
 
         except Exception as e:
 
-            result[tf] = {
+            results[tf] = {
                 "signal": "ERROR",
                 "score": 0,
                 "error": str(e)
             }
 
-    return result
+    return results
 
 
 def final_decision(results):
@@ -49,38 +58,46 @@ def final_decision(results):
 
     for tf in results.values():
 
+        signal = tf.get("signal", "WAIT")
+
         total_score += tf.get("score", 0)
 
-        signal = tf.get("signal")
+        if signal in ["BUY", "STRONG BUY"]:
 
-        if signal == "BUY":
             buy += 1
 
-        elif signal == "SELL":
+        elif signal in ["SELL", "STRONG SELL"]:
+
             sell += 1
 
         else:
+
             wait += 1
 
     if buy >= 3:
-        final = "STRONG BUY"
+
+        decision = "BUY"
 
     elif sell >= 3:
-        final = "STRONG SELL"
 
-    elif buy > sell:
-        final = "BUY"
-
-    elif sell > buy:
-        final = "SELL"
+        decision = "SELL"
 
     else:
-        final = "WAIT"
+
+        decision = "WAIT"
 
     return {
-        "decision": final,
+
+        "signal": decision,
+
         "score": total_score,
+
         "buy": buy,
+
         "sell": sell,
-        "wait": wait
-    }
+
+        "wait": wait,
+
+        "details": results
+
+                }
