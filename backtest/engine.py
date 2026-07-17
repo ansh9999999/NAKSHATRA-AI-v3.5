@@ -1,9 +1,15 @@
+"""
+NAKSHATRA AI
+Backtest Engine
+"""
+
 import pandas as pd
 
 
 class BacktestEngine:
 
     def __init__(self):
+
         self.trades = []
 
     def add_trade(
@@ -11,34 +17,59 @@ class BacktestEngine:
         symbol,
         signal,
         entry,
+        stop_loss,
+        target,
         exit_price,
         score,
         reasons
     ):
 
-        if signal == "BUY":
+        pnl = 0
+
+        result = "OPEN"
+
+        if signal in ["BUY", "STRONG BUY"]:
+
             pnl = exit_price - entry
 
-        elif signal == "SELL":
+        elif signal in ["SELL", "STRONG SELL"]:
+
             pnl = entry - exit_price
 
-        else:
-            return
+        if pnl > 0:
+            result = "WIN"
+
+        elif pnl < 0:
+            result = "LOSS"
 
         trade = {
+
             "symbol": symbol,
+
             "signal": signal,
-            "entry": round(entry, 2),
-            "exit": round(exit_price, 2),
-            "pnl": round(pnl, 2),
+
+            "entry": round(entry,2),
+
+            "stop_loss": round(stop_loss,2),
+
+            "target": round(target,2),
+
+            "exit": round(exit_price,2),
+
             "score": score,
-            "result": "WIN" if pnl > 0 else "LOSS",
-            "reasons": reasons
+
+            "pnl": round(pnl,2),
+
+            "result": result,
+
+            "reasons": ", ".join(reasons)
+
         }
 
         self.trades.append(trade)
 
     def dataframe(self):
+
         return pd.DataFrame(self.trades)
 
     def summary(self):
@@ -46,20 +77,48 @@ class BacktestEngine:
         df = self.dataframe()
 
         if df.empty:
+
             return {
-                "Trades": 0,
-                "Win Rate": 0,
-                "Net PnL": 0
+
+                "Trades":0,
+
+                "Wins":0,
+
+                "Losses":0,
+
+                "Win Rate":0,
+
+                "Net PnL":0
+
             }
 
-        wins = len(df[df["result"] == "WIN"])
+        wins = len(df[df["result"]=="WIN"])
+
+        losses = len(df[df["result"]=="LOSS"])
 
         total = len(df)
 
+        pnl = df["pnl"].sum()
+
         return {
+
             "Trades": total,
+
             "Wins": wins,
-            "Losses": total - wins,
-            "Win Rate": round((wins / total) * 100, 2),
-            "Net PnL": round(df["pnl"].sum(), 2)
+
+            "Losses": losses,
+
+            "Win Rate": round((wins/total)*100,2),
+
+            "Net PnL": round(pnl,2)
+
         }
+
+    def save_csv(self, filename="backtest_results.csv"):
+
+        self.dataframe().to_csv(
+            filename,
+            index=False
+        )
+
+        return filename
