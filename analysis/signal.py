@@ -1,8 +1,10 @@
 from analysis.indicators import ema, rsi, macd, atr
 from analysis.adx import adx
+from analysis.market_structure import analyze_market_structure
 
 
 def generate_signal(df):
+
     if df.empty or len(df) < 50:
         return {
             "signal": "WAIT",
@@ -27,10 +29,14 @@ def generate_signal(df):
     signal_value = signal_line.iloc[-1]
 
     atr_value = atr(high, low, close).iloc[-1]
+
     adx_value = adx(high, low, close).iloc[-1]
 
-    score = 0
-    reasons = []
+    structure = analyze_market_structure(df)
+
+    score = structure["score"]
+
+    reasons = structure["reasons"].copy()
 
     # EMA
     if ema9 > ema21:
@@ -56,22 +62,31 @@ def generate_signal(df):
         score -= 15
         reasons.append("MACD Bearish")
 
-    # ADX (trend strength)
+    # ADX
     if adx_value >= 25:
         score += 10
         reasons.append("Strong Trend (ADX)")
     else:
         reasons.append("Weak Trend")
 
-    # ATR (volatility)
+    # ATR
     if atr_value > 0:
         score += 5
-        reasons.append("ATR Normal")
+        reasons.append("Healthy Volatility")
 
-    if score >= 40:
+    # Final Decision
+    if score >= 60:
+        signal = "STRONG BUY"
+
+    elif score >= 40:
         signal = "BUY"
+
+    elif score <= -60:
+        signal = "STRONG SELL"
+
     elif score <= -40:
         signal = "SELL"
+
     else:
         signal = "WAIT"
 
@@ -84,5 +99,8 @@ def generate_signal(df):
         "rsi": round(float(rsi_value), 2),
         "adx": round(float(adx_value), 2),
         "atr": round(float(atr_value), 2),
+        "trend": structure["trend"],
+        "bos": structure["bos"],
+        "choch": structure["choch"],
         "reasons": reasons
     }
