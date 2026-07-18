@@ -1,48 +1,54 @@
+"""
+NAKSHATRA AI
+Scheduler
+"""
+
 from apscheduler.schedulers.background import BackgroundScheduler
-from apscheduler.triggers.interval import IntervalTrigger
 
 from scanner import market_scan
-from logger import logger
-from config import SCAN_INTERVAL
+from monitor.trade_monitor import monitor_open_trades
 
-scheduler = BackgroundScheduler(timezone="UTC")
+from logger import logger
+
+
+scheduler = BackgroundScheduler()
 
 
 def start_scheduler():
-    try:
-        if scheduler.running:
-            logger.info("Scheduler is already running.")
-            return
 
-        scheduler.add_job(
-            market_scan,
-            trigger=IntervalTrigger(seconds=SCAN_INTERVAL),
-            id="market_scan",
-            replace_existing=True,
-            max_instances=1,
-            coalesce=True,
-            misfire_grace_time=60
-        )
+    if scheduler.running:
+        logger.info("Scheduler already running")
+        return
 
-        scheduler.start()
+    # Run market scanner every 5 minutes
+    scheduler.add_job(
+        market_scan,
+        "interval",
+        minutes=5,
+        id="market_scan",
+        replace_existing=True
+    )
 
-        logger.info("===================================")
-        logger.info("NAKSHATRA AI Scheduler Started")
-        logger.info(f"Scan Interval : {SCAN_INTERVAL} seconds")
-        logger.info("===================================")
+    # Monitor open trades every 1 minute
+    scheduler.add_job(
+        monitor_open_trades,
+        "interval",
+        minutes=1,
+        id="trade_monitor",
+        replace_existing=True
+    )
 
-        # First scan immediately
-        market_scan()
+    scheduler.start()
 
-    except Exception as e:
-        logger.exception(f"Scheduler Start Error: {e}")
+    logger.info("===================================")
+    logger.info("NAKSHATRA AI Scheduler Started")
+    logger.info("Market Scan : Every 5 Minutes")
+    logger.info("Trade Monitor : Every 1 Minute")
+    logger.info("===================================")
 
 
 def stop_scheduler():
-    try:
-        if scheduler.running:
-            scheduler.shutdown(wait=False)
-            logger.info("Scheduler Stopped")
 
-    except Exception as e:
-        logger.exception(f"Scheduler Stop Error: {e}")
+    if scheduler.running:
+        scheduler.shutdown()
+        logger.info("Scheduler Stopped")
