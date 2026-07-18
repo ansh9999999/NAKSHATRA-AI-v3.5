@@ -1,26 +1,96 @@
+"""
+NAKSHATRA AI
+Configuration
+"""
+
 import os
-from dotenv import load_dotenv
 
-load_dotenv()
+# ==========================================================
+# PROJECT
+# ==========================================================
 
-# Delta Exchange
-DELTA_API_KEY = os.getenv("DELTA_API_KEY")
-DELTA_API_SECRET = os.getenv("DELTA_API_SECRET")
-BASE_URL = "https://api.india.delta.exchange"
+PROJECT_NAME = "NAKSHATRA AI"
 
-# Telegram
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+VERSION = "5.0"
 
-# ntfy
-NTFY_TOPIC = os.getenv("NTFY_TOPIC")
+# ==========================================================
+# BROKER
+# ==========================================================
 
-# Scanner
-SYMBOLS = [
-    "BTCUSD",
-    "ETHUSD"
-]
+# paper
+# delta
 
-TIMEFRAME = "5m"
-CANDLE_LIMIT = 200
-SCAN_INTERVAL = 300  # seconds
+BROKER_TYPE = "paper"
+
+# ==========================================================
+# DELTA EXCHANGE
+# ==========================================================
+
+DELTA_BASE_URL = "https://api.india.delta.exchange"
+
+DELTA_API_KEY = os.getenv("DELTA_API_KEY", "")
+
+DELTA_API_SECRET = os.getenv("DELTA_API_SECRET", "")
+
+# ==========================================================
+# TELEGRAM
+# ==========================================================
+
+TELEGRAM_BOT_TOKEN = os.getenv(
+    "TELEGRAM_BOT_TOKEN",
+    ""
+)
+
+TELEGRAM_CHAT_ID = os.getenv(
+    "TELEGRAM_CHAT_ID",
+    ""
+)
+
+# ==========================================================
+# NTFY
+# ==========================================================
+
+NTFY_TOPIC = os.getenv(
+    "NTFY_TOPIC",
+    "nakshatra-ai"
+)
+
+# ==========================================================
+# DATABASE
+# ==========================================================
+
+DATABASE_NAME = "trades.db"
+
+# ==========================================================
+# SCANNER
+# ==========================================================
+
+SCAN_INTERVAL = 5
+
+MONITOR_INTERVAL = 1
+
+MAX_HOLD_CANDLES = 20
+
+# ==========================================================
+# RISK MANAGEMENT
+# ==========================================================
+
+STARTING_CAPITAL = 100000
+
+RISK_PER_TRADE = 2
+
+MAX_OPEN_TRADES = 5
+
+ATR_MULTIPLIER = 2
+
+MIN_RISK_REWARD = 2
+
+# ==========================================================
+# BACKTEST
+# ==========================================================
+
+BACKTEST_LIMIT = 1000
+
+# ==========================================================
+# SYMBOLS
+# ==========================================================
