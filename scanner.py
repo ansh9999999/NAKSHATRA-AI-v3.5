@@ -1,8 +1,17 @@
+"""
+NAKSHATRA AI
+Market Scanner
+"""
+
 from config import SYMBOLS
 
 from history import get_history
 
 from analysis.signal import generate_signal
+
+from risk.trade_manager import create_trade
+
+from database.logger import log_trade
 
 from telegram import send_message
 
@@ -10,65 +19,23 @@ from notify import send_notification
 
 from logger import logger
 
-from risk.trade_manager import create_trade
-
-from database.logger import log_trade
+from broker.manager import broker
 
 
+# Prevent duplicate alerts
 last_alerts = {}
 
 
-def market_scan():
+def create_message(
+    symbol,
+    result,
+    trade
+):
+    """
+    Build Telegram/ntfy message.
+    """
 
-    logger.info("========== NAKSHATRA AI Scan Started ==========")
-
-    for symbol in SYMBOLS:
-
-        try:
-
-            df = get_history(symbol)
-
-            if df.empty:
-                logger.warning(f"{symbol}: No Market Data")
-                continue
-
-            result = generate_signal(df)
-
-            signal = result["signal"]
-
-            if signal == "WAIT":
-                logger.info(f"{symbol}: WAIT")
-                continue
-
-            previous = last_alerts.get(symbol)
-
-            if previous == signal:
-                logger.info(f"{symbol}: Duplicate Alert")
-                continue
-
-            last_alerts[symbol] = signal
-
-            trade = create_trade(
-                signal=signal,
-                entry_price=result["price"],
-                atr=result["atr"]
-            )
-
-            if trade is None:
-                continue
-
-            # Save trade in database
-            try:
-                log_trade(
-                    symbol=symbol,
-                    signal_data=result,
-                    trade=trade
-                )
-                logger.info(f"{symbol}: Trade Saved")
-            except Exception as db_error:
-                logger.exception(f"{symbol}: Database Error: {db_error}")
-
-            message = f"""
+    return f"""
 🚀 NAKSHATRA AI
 
 📊 Symbol : {symbol}
@@ -85,9 +52,9 @@ def market_scan():
 
 🎯 TP3 : {trade['tp3']}
 
-📦 Qty : {trade['quantity']}
+📦 Quantity : {trade['quantity']}
 
-⚖ RR : {trade['risk_reward']}
+⚖ Risk Reward : {trade['risk_reward']}
 
 📈 Trend : {result['trend']}
 
@@ -98,7 +65,107 @@ def market_scan():
 ⭐ Score : {result['score']}
 """
 
-            telegram_ok = send_message(message)
+
+def execute_trade(
+    symbol,
+    signal,
+    trade
+):
+    """
+    Execute trade using active broker.
+    """
+
+    side = signal.lower()
+
+    return broker.place_order(
+
+        symbol=symbol,
+
+        side=side,
+
+        quantity=trade["quantity"],
+
+        price=trade["entry"],
+
+        order_type="market"
+
+    )
+    def market_scan():
+    """
+    Main market scanning function.
+    """
+
+    logger.info("========== NAKSHATRA AI Scan Started ==========")
+
+    for symbol in SYMBOLS:
+
+        try:
+
+            logger.info(f"Scanning {symbol}")
+
+            df = get_history(symbol)
+
+            if df.empty:
+                logger.warning(f"{symbol}: No Market Data")
+                continue
+
+            result = generate_signal(df)
+
+            signal = result["signal"]
+
+            if signal == "WAIT":
+                logger.info(f"{symbol}: WAIT")
+                continue
+
+            previous_signal = last_alerts.get(symbol)
+
+            if previous_signal == signal:
+                logger.info(f"{symbol}: Duplicate Signal")
+                continue
+
+            last_alerts[symbol] = signal
+
+            trade = create_trade(
+                signal=signal,
+                entry_price=result["price"],
+                atr=result["atr"]
+            )
+
+            if trade is None:
+                logger.warning(f"{symbol}: Trade creation failed")
+                continue
+
+            logger.info(f"{symbol}: Executing Trade")
+
+            order = execute_trade(
+                symbol=symbol,
+                signal=signal,
+                trade=trade
+            )
+
+            logger.info(f"{symbol}: Order Response -> {order}")
+
+            try:
+
+                log_trade(
+                    symbol=symbol,
+                    signal_data=result,
+                    trade=trade
+                )
+
+                logger.info(f"{symbol}: Trade Logged")
+
+            except Exception as db_error:
+
+                logger.exception(
+                    f"{symbol}: Database Error : {db_error}"
+                )
+
+            message = create_message(
+                symbol,
+                result,
+                trade
+                            telegram_ok = send_message(message)
 
             if telegram_ok:
                 logger.info(f"{symbol}: Telegram Sent")
@@ -115,11 +182,57 @@ def market_scan():
             else:
                 logger.warning(f"{symbol}: ntfy Failed")
 
-        except Exception as e:
-            logger.exception(f"{symbol}: {e}")
+            logger.info(
+                f"{symbol}: Scan Completed Successfully"
+            )
 
-    logger.info("========== Scan Finished ==========")
+        except Exception as e:
+
+            logger.exception(
+                f"{symbol}: {e}"
+            )
+
+    logger.info(
+        "========== NAKSHATRA AI Scan Finished =========="
+    )
+
+
+def broker_health():
+
+    """
+    Check broker connection.
+    """
+
+    try:
+
+        return broker.health()
+
+    except Exception as e:
+
+        logger.exception(
+            f"Broker Health Error : {e}"
+        )
+
+        return False
 
 
 if __name__ == "__main__":
-    market_scan()
+
+    logger.info(
+        "Starting NAKSHATRA AI Scanner..."
+    )
+
+    if broker_health():
+
+        logger.info(
+            "Broker Connected Successfully"
+        )
+
+        market_scan()
+
+    else:
+
+        logger.error(
+            "Broker Connection Failed"
+    )
+    )
