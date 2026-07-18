@@ -12,6 +12,8 @@ from logger import logger
 
 from risk.trade_manager import create_trade
 
+from database.logger import log_trade
+
 
 last_alerts = {}
 
@@ -27,9 +29,7 @@ def market_scan():
             df = get_history(symbol)
 
             if df.empty:
-
                 logger.warning(f"{symbol}: No Market Data")
-
                 continue
 
             result = generate_signal(df)
@@ -37,34 +37,36 @@ def market_scan():
             signal = result["signal"]
 
             if signal == "WAIT":
-
                 logger.info(f"{symbol}: WAIT")
-
                 continue
 
             previous = last_alerts.get(symbol)
 
             if previous == signal:
-
                 logger.info(f"{symbol}: Duplicate Alert")
-
                 continue
 
             last_alerts[symbol] = signal
 
             trade = create_trade(
-
                 signal=signal,
-
                 entry_price=result["price"],
-
                 atr=result["atr"]
-
             )
 
             if trade is None:
-
                 continue
+
+            # Save trade in database
+            try:
+                log_trade(
+                    symbol=symbol,
+                    signal_data=result,
+                    trade=trade
+                )
+                logger.info(f"{symbol}: Trade Saved")
+            except Exception as db_error:
+                logger.exception(f"{symbol}: Database Error: {db_error}")
 
             message = f"""
 🚀 NAKSHATRA AI
@@ -99,31 +101,25 @@ def market_scan():
             telegram_ok = send_message(message)
 
             if telegram_ok:
-
                 logger.info(f"{symbol}: Telegram Sent")
-
             else:
-
                 logger.warning(f"{symbol}: Telegram Failed")
 
             notify_ok = send_notification(
-
                 title=f"{symbol} {signal}",
-
                 message=message
-
             )
 
             if notify_ok:
-
                 logger.info(f"{symbol}: ntfy Sent")
-
             else:
-
                 logger.warning(f"{symbol}: ntfy Failed")
 
         except Exception as e:
-
             logger.exception(f"{symbol}: {e}")
 
     logger.info("========== Scan Finished ==========")
+
+
+if __name__ == "__main__":
+    market_scan()
