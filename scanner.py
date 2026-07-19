@@ -4,21 +4,13 @@ Market Scanner
 """
 
 from config import SYMBOLS
-
 from history import get_history
-
 from analysis.signal import generate_signal
-
 from risk.trade_manager import create_trade
-
 from database.logger import log_trade
-
 from telegram import send_message
-
 from notify import send_notification
-
 from logger import logger
-
 from broker.manager import broker
 
 
@@ -26,11 +18,7 @@ from broker.manager import broker
 last_alerts = {}
 
 
-def create_message(
-    symbol,
-    result,
-    trade
-):
+def create_message(symbol, result, trade):
     """
     Build Telegram/ntfy message.
     """
@@ -66,11 +54,7 @@ def create_message(
 """
 
 
-def execute_trade(
-    symbol,
-    signal,
-    trade
-):
+def execute_trade(symbol, signal, trade):
     """
     Execute trade using active broker.
     """
@@ -78,17 +62,11 @@ def execute_trade(
     side = signal.lower()
 
     return broker.place_order(
-
         symbol=symbol,
-
         side=side,
-
         quantity=trade["quantity"],
-
         price=trade["entry"],
-
-        order_type="market"
-
+        order_type="market",
     )
     def market_scan():
     """
@@ -128,7 +106,7 @@ def execute_trade(
             trade = create_trade(
                 signal=signal,
                 entry_price=result["price"],
-                atr=result["atr"]
+                atr=result["atr"],
             )
 
             if trade is None:
@@ -140,23 +118,21 @@ def execute_trade(
             order = execute_trade(
                 symbol=symbol,
                 signal=signal,
-                trade=trade
+                trade=trade,
             )
 
             logger.info(f"{symbol}: Order Response -> {order}")
 
             try:
-
                 log_trade(
                     symbol=symbol,
                     signal_data=result,
-                    trade=trade
+                    trade=trade,
                 )
 
                 logger.info(f"{symbol}: Trade Logged")
 
             except Exception as db_error:
-
                 logger.exception(
                     f"{symbol}: Database Error : {db_error}"
                 )
@@ -164,8 +140,10 @@ def execute_trade(
             message = create_message(
                 symbol,
                 result,
-                trade
-                            telegram_ok = send_message(message)
+                trade,
+            )
+
+            telegram_ok = send_message(message)
 
             if telegram_ok:
                 logger.info(f"{symbol}: Telegram Sent")
@@ -174,7 +152,7 @@ def execute_trade(
 
             notify_ok = send_notification(
                 title=f"{symbol} {signal}",
-                message=message
+                message=message,
             )
 
             if notify_ok:
@@ -182,37 +160,25 @@ def execute_trade(
             else:
                 logger.warning(f"{symbol}: ntfy Failed")
 
-            logger.info(
-                f"{symbol}: Scan Completed Successfully"
-            )
+            logger.info(f"{symbol}: Scan Completed Successfully")
 
         except Exception as e:
 
-            logger.exception(
-                f"{symbol}: {e}"
-            )
+            logger.exception(f"{symbol}: {e}")
 
-    logger.info(
-        "========== NAKSHATRA AI Scan Finished =========="
-    )
-
-
-def broker_health():
-
+    logger.info("========== NAKSHATRA AI Scan Finished ==========")
+    def broker_health():
     """
     Check broker connection.
     """
 
     try:
-
         return broker.health()
 
     except Exception as e:
-
         logger.exception(
             f"Broker Health Error : {e}"
         )
-
         return False
 
 
@@ -234,5 +200,4 @@ if __name__ == "__main__":
 
         logger.error(
             "Broker Connection Failed"
-    )
     )
