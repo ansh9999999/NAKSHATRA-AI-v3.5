@@ -1,3 +1,4 @@
+# scanner.py replacement
 """
 NAKSHATRA AI
 Market Scanner
@@ -15,7 +16,6 @@ from broker.manager import broker
 
 last_alerts = {}
 
-
 def create_message(symbol, result, trade):
     return (
         f"NAKSHATRA AI\n"
@@ -28,113 +28,54 @@ def create_message(symbol, result, trade):
         f"TP3: {trade['tp3']}\n"
         f"Quantity: {trade['quantity']}\n"
         f"Risk Reward: {trade['risk_reward']}\n"
-        f"Trend: {result.get('trend', '')}\n"
-        f"Volume: {result.get('volume_status', '')}\n"
-        f"Liquidity: {result.get('liquidity', '')}\n"
-        f"Score: {result.get('score', '')}"
+        f"Trend: {result.get('trend','')}\n"
+        f"Volume: {result.get('volume_status','')}\n"
+        f"Liquidity: {result.get('liquidity','')}\n"
+        f"Score: {result.get('score','')}"
     )
-
 
 def execute_trade(symbol, signal, trade):
-    side = "sell" if "SELL" in signal.upper() else "buy"
+    side="sell" if "SELL" in signal.upper() else "buy"
+    return broker.place_order(symbol=symbol,side=side,quantity=trade["quantity"],price=trade["entry"],order_type="market")
 
-    return broker.place_order(
-        symbol=symbol,
-        side=side,
-        quantity=trade["quantity"],
-        price=trade["entry"],
-        order_type="market",
-    )
-    def market_scan():
+def market_scan():
     logger.info("NAKSHATRA AI Scan Started")
-
     for symbol in SYMBOLS:
-
         try:
-            df = get_history(symbol)
-
+            df=get_history(symbol)
             if df.empty:
-                logger.warning(f"{symbol}: No market data")
                 continue
-
-            result = generate_signal(df)
-
-            signal = result.get("signal", "WAIT")
-
-            if signal == "WAIT":
-                logger.info(f"{symbol}: WAIT")
+            result=generate_signal(df)
+            signal=result.get("signal","WAIT")
+            if signal=="WAIT":
                 continue
-
-            if last_alerts.get(symbol) == signal:
-                logger.info(f"{symbol}: Duplicate signal")
+            if last_alerts.get(symbol)==signal:
                 continue
-
-            last_alerts[symbol] = signal
-
-            trade = create_trade(
-                signal=signal,
-                entry_price=result["price"],
-                atr=result["atr"],
-            )
-
+            last_alerts[symbol]=signal
+            trade=create_trade(signal=signal,entry_price=result["price"],atr=result["atr"])
             if trade is None:
-                logger.warning(f"{symbol}: Trade creation failed")
                 continue
-
-            order = execute_trade(
-                symbol=symbol,
-                signal=signal,
-                trade=trade,
-            )
-
-            logger.info(f"{symbol}: {order}")
-
+            logger.info(execute_trade(symbol,signal,trade))
             try:
-                log_trade(
-                    symbol=symbol,
-                    signal_data=result,
-                    trade=trade,
-                )
+                log_trade(symbol=symbol,signal_data=result,trade=trade)
             except Exception as e:
-                logger.exception(f"Database Error: {e}")
-
-            message = create_message(
-                symbol,
-                result,
-                trade,
-            )
-
-            send_message(message)
-
-            send_notification(
-                title=f"{symbol} {signal}",
-                message=message,
-            )
-
+                logger.exception(e)
+            msg=create_message(symbol,result,trade)
+            send_message(msg)
+            send_notification(title=f"{symbol} {signal}",message=msg)
         except Exception as e:
             logger.exception(f"{symbol}: {e}")
-
     logger.info("NAKSHATRA AI Scan Finished")
 
 def broker_health():
     try:
         return broker.health()
-
     except Exception as e:
-        logger.exception(f"Broker Health Error: {e}")
+        logger.exception(e)
         return False
 
-
-if __name__ == "__main__":
-
-    logger.info("Starting NAKSHATRA AI Scanner...")
-
+if __name__=="__main__":
     if broker_health():
-
-        logger.info("Broker Connected Successfully")
-
         market_scan()
-
     else:
-
         logger.error("Broker Connection Failed")
