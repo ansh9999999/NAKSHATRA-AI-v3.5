@@ -1,6 +1,7 @@
 """
 NAKSHATRA AI
 Historical Candle Data
+Phase 2 - Multi Timeframe Engine
 """
 
 import requests
@@ -9,11 +10,7 @@ import pandas as pd
 from config import DELTA_BASE_URL
 
 
-def get_history(
-    symbol,
-    resolution="5m",
-    limit=200
-):
+def _fetch_history(symbol, resolution="5m", limit=200):
 
     url = f"{DELTA_BASE_URL}/v2/history/candles"
 
@@ -35,10 +32,7 @@ def get_history(
 
             response.raise_for_status()
 
-            data = response.json().get(
-                "result",
-                []
-            )
+            data = response.json().get("result", [])
 
             if not data:
                 return pd.DataFrame()
@@ -47,9 +41,7 @@ def get_history(
 
             if "time" in df.columns:
                 df.rename(
-                    columns={
-                        "time": "timestamp"
-                    },
+                    columns={"time": "timestamp"},
                     inplace=True
                 )
 
@@ -61,12 +53,12 @@ def get_history(
                 "volume"
             ]
 
-            for column in numeric_columns:
+            for col in numeric_columns:
 
-                if column in df.columns:
+                if col in df.columns:
 
-                    df[column] = pd.to_numeric(
-                        df[column],
+                    df[col] = pd.to_numeric(
+                        df[col],
                         errors="coerce"
                     )
 
@@ -92,7 +84,41 @@ def get_history(
                 return pd.DataFrame()
 
         except Exception:
-
             return pd.DataFrame()
 
     return pd.DataFrame()
+
+
+# --------------------------
+# Existing Function
+# --------------------------
+
+def get_history(symbol, resolution="5m", limit=200):
+    """
+    Backward compatible
+    Existing scanner continues to work
+    """
+    return _fetch_history(symbol, resolution, limit)
+
+
+# --------------------------
+# Phase 2 Multi Timeframe
+# --------------------------
+
+def get_multi_timeframe_history(symbol, limit=200):
+
+    return {
+
+        "5m": _fetch_history(symbol, "5m", limit),
+
+        "15m": _fetch_history(symbol, "15m", limit),
+
+        "1h": _fetch_history(symbol, "1h", limit),
+
+        "1d": _fetch_history(symbol, "1d", limit),
+
+        "1w": _fetch_history(symbol, "1w", limit),
+
+        "1mo": _fetch_history(symbol, "1mo", limit),
+
+    }
