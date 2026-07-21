@@ -1,6 +1,6 @@
 """
 NAKSHATRA AI
-Backtest Engine
+Advanced Backtest Engine V2
 """
 
 import pandas as pd
@@ -9,7 +9,6 @@ import pandas as pd
 class BacktestEngine:
 
     def __init__(self):
-
         self.trades = []
 
     def add_trade(
@@ -21,19 +20,24 @@ class BacktestEngine:
         target,
         exit_price,
         score,
-        reasons
+        reasons,
+        grade="N/A",
+        confidence=0,
+        timeframe="MULTI",
+        holding_candles=0
     ):
 
         pnl = 0
-
         result = "OPEN"
 
-        if signal in ["BUY", "STRONG BUY"]:
+        # -------------------------
+        # Calculate PnL
+        # -------------------------
 
+        if signal in ["BUY", "STRONG BUY"]:
             pnl = exit_price - entry
 
         elif signal in ["SELL", "STRONG SELL"]:
-
             pnl = entry - exit_price
 
         if pnl > 0:
@@ -42,23 +46,49 @@ class BacktestEngine:
         elif pnl < 0:
             result = "LOSS"
 
+        # -------------------------
+        # Risk Reward
+        # -------------------------
+
+        risk = abs(entry - stop_loss)
+        reward = abs(target - entry)
+
+        risk_reward = 0
+
+        if risk != 0:
+            risk_reward = round(reward / risk, 2)
+
+        # -------------------------
+        # Store Trade
+        # -------------------------
+
         trade = {
 
             "symbol": symbol,
 
             "signal": signal,
 
-            "entry": round(entry,2),
+            "grade": grade,
 
-            "stop_loss": round(stop_loss,2),
+            "confidence": confidence,
 
-            "target": round(target,2),
+            "timeframe": timeframe,
 
-            "exit": round(exit_price,2),
+            "entry": round(entry, 2),
+
+            "stop_loss": round(stop_loss, 2),
+
+            "target": round(target, 2),
+
+            "exit": round(exit_price, 2),
 
             "score": score,
 
-            "pnl": round(pnl,2),
+            "holding_candles": holding_candles,
+
+            "risk_reward": risk_reward,
+
+            "pnl": round(pnl, 2),
 
             "result": result,
 
@@ -69,7 +99,6 @@ class BacktestEngine:
         self.trades.append(trade)
 
     def dataframe(self):
-
         return pd.DataFrame(self.trades)
 
     def summary(self):
@@ -77,28 +106,26 @@ class BacktestEngine:
         df = self.dataframe()
 
         if df.empty:
-
             return {
-
-                "Trades":0,
-
-                "Wins":0,
-
-                "Losses":0,
-
-                "Win Rate":0,
-
-                "Net PnL":0
-
+                "Trades": 0,
+                "Wins": 0,
+                "Losses": 0,
+                "Win Rate": 0,
+                "Net PnL": 0,
+                "Average RR": 0,
+                "Average Confidence": 0
             }
 
-        wins = len(df[df["result"]=="WIN"])
-
-        losses = len(df[df["result"]=="LOSS"])
+        wins = len(df[df["result"] == "WIN"])
+        losses = len(df[df["result"] == "LOSS"])
 
         total = len(df)
 
         pnl = df["pnl"].sum()
+
+        avg_rr = round(df["risk_reward"].mean(), 2)
+
+        avg_conf = round(df["confidence"].mean(), 2)
 
         return {
 
@@ -108,9 +135,13 @@ class BacktestEngine:
 
             "Losses": losses,
 
-            "Win Rate": round((wins/total)*100,2),
+            "Win Rate": round((wins / total) * 100, 2),
 
-            "Net PnL": round(pnl,2)
+            "Net PnL": round(pnl, 2),
+
+            "Average RR": avg_rr,
+
+            "Average Confidence": avg_conf
 
         }
 
