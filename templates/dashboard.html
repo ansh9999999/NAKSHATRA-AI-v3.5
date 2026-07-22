@@ -1,1 +1,135 @@
-<!-- Dashboard -->
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<title>NAKSHATRA AI Dashboard</title>
+
+<link rel="stylesheet" href="/static/style.css">
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+</head>
+
+<body>
+
+<div class="container">
+
+<header>
+
+<h1>🚀 NAKSHATRA AI</h1>
+
+<div class="status">
+
+<span id="brokerStatus">🟢 Broker Online</span>
+
+<span id="schedulerStatus">🟢 Scheduler Running</span>
+
+</div>
+
+</header>
+
+<div class="cards">
+
+<div class="card">
+<h3>Total Trades</h3>
+<p id="totalTrades">0</p>
+</div>
+
+<div class="card">
+<h3>Wins</h3>
+<p id="wins">0</p>
+</div>
+
+<div class="card">
+<h3>Losses</h3>
+<p id="losses">0</p>
+</div>
+
+<div class="card">
+<h3>Open Trades</h3>
+<p id="openTrades">0</p>
+</div>
+
+<div class="card">
+<h3>Win Rate</h3>
+<p id="winRate">0%</p>
+</div>
+
+<div class="card">
+<h3>Net P&L</h3>
+<p id="netPnl">₹0</p>
+</div>
+
+</div>
+
+<div class="chart-box">
+
+<h2>Equity Curve</h2>
+
+<canvas id="equityChart"></canvas>
+
+</div>
+
+<div class="table-box">
+
+<h2>Recent Trades</h2>
+
+<table>
+
+<thead>
+
+<tr>
+
+<th>ID</th>
+<th>Symbol</th>
+<th>Signal</th>
+<th>Entry</th>
+<th>Exit</th>
+<th>P&L</th>
+<th>Status</th>
+
+</tr>
+
+</thead>
+
+<tbody id="tradeTable">
+
+</tbody>
+
+</table>
+
+</div>
+
+<div class="scanner">
+
+<h2>Live Scanner</h2>
+
+<div id="scannerSignals">
+
+No Signals
+
+</div>
+
+</div>
+
+<footer>
+
+<p>
+
+NAKSHATRA AI v4.0
+
+</p>
+
+</footer>
+
+</div>
+
+<script src="/static/app.js"></script>
+
+</body>
+
+  </html>
