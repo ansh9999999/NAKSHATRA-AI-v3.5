@@ -6,6 +6,10 @@ Database Models
 from database.database import get_connection
 
 
+# ---------------------------------------------------
+# Save Trade
+# ---------------------------------------------------
+
 def save_trade(trade):
 
     conn = get_connection()
@@ -48,13 +52,18 @@ def save_trade(trade):
     conn.close()
 
 
+# ---------------------------------------------------
+# Get All Trades
+# ---------------------------------------------------
+
 def get_all_trades():
 
     conn = get_connection()
     cursor = conn.cursor()
 
     cursor.execute("""
-    SELECT * FROM trades
+    SELECT *
+    FROM trades
     ORDER BY id DESC
     """)
 
@@ -64,6 +73,10 @@ def get_all_trades():
 
     return rows
 
+
+# ---------------------------------------------------
+# Get Open Trades
+# ---------------------------------------------------
 
 def get_open_trades():
 
@@ -83,6 +96,10 @@ def get_open_trades():
 
     return rows
 
+
+# ---------------------------------------------------
+# Close Trade
+# ---------------------------------------------------
 
 def update_trade(
     trade_id,
@@ -110,3 +127,125 @@ def update_trade(
 
     conn.commit()
     conn.close()
+
+
+# ---------------------------------------------------
+# Update Stop Loss
+# ---------------------------------------------------
+
+def update_stop_loss(
+    trade_id,
+    stop_loss
+):
+
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+    UPDATE trades
+    SET stop_loss=?
+    WHERE id=?
+    """, (
+        stop_loss,
+        trade_id
+    ))
+
+    conn.commit()
+    conn.close()
+
+
+# ---------------------------------------------------
+# Update Target
+# ---------------------------------------------------
+
+def update_target(
+    trade_id,
+    target
+):
+
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+    UPDATE trades
+    SET target=?
+    WHERE id=?
+    """, (
+        target,
+        trade_id
+    ))
+
+    conn.commit()
+    conn.close()
+
+
+# ---------------------------------------------------
+# Update Stop Loss + Target
+# ---------------------------------------------------
+
+def update_trade_levels(
+    trade_id,
+    stop_loss,
+    target
+):
+
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+    UPDATE trades
+    SET
+        stop_loss=?,
+        target=?
+    WHERE id=?
+    """, (
+        stop_loss,
+        target,
+        trade_id
+    ))
+
+    conn.commit()
+    conn.close()
+
+
+# ---------------------------------------------------
+# Delete Trade
+# ---------------------------------------------------
+
+def delete_trade(
+    trade_id
+):
+
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+    DELETE FROM trades
+    WHERE id=?
+    """, (
+        trade_id,
+    ))
+
+    conn.commit()
+    conn.close()
+
+
+# ---------------------------------------------------
+# Trade Count
+# ---------------------------------------------------
+
+def trade_count():
+
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+    SELECT COUNT(*)
+    FROM trades
+    """)
+
+    count = cursor.fetchone()[0]
+
+    conn.close()
+
+    return count
