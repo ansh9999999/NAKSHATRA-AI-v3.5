@@ -1,119 +1,146 @@
-// Dashboard Data Loader
+// ===============================
+// NAKSHATRA AI Dashboard v2.0
+// static/app.js
+// ===============================
 
-let chart = null;
+let equityChart = null;
 
-async function loadDashboard() {
+async function loadStats() {
 
-    try {
+    const response = await fetch("/stats");
+    const data = await response.json();
 
-        // Stats
-        const statsResponse = await fetch("/api/stats");
-        const stats = await statsResponse.json();
+    document.getElementById("totalTrades").innerText =
+        data.total_trades;
 
-        document.getElementById("totalTrades").innerText = stats.total_trades ?? 0;
-        document.getElementById("wins").innerText = stats.wins ?? 0;
-        document.getElementById("losses").innerText = stats.losses ?? 0;
-        document.getElementById("openTrades").innerText = stats.open_trades ?? 0;
-        document.getElementById("winRate").innerText = (stats.win_rate ?? 0) + "%";
-        document.getElementById("netPnl").innerText = "₹ " + (stats.net_pnl ?? 0);
+    document.getElementById("wins").innerText =
+        data.wins;
 
-        // Trade History
-        const historyResponse = await fetch("/api/history");
-        const history = await historyResponse.json();
+    document.getElementById("losses").innerText =
+        data.losses;
 
-        let table = "";
+    document.getElementById("openTrades").innerText =
+        data.open_trades;
 
-        history.forEach((trade) => {
+    document.getElementById("winRate").innerText =
+        data.win_rate + "%";
 
-            table += `
-            <tr>
-                <td>${trade.id}</td>
-                <td>${trade.symbol}</td>
-                <td>${trade.signal}</td>
-                <td>${trade.entry}</td>
-                <td>${trade.exit ?? "-"}</td>
-                <td>${trade.pnl}</td>
-                <td>${trade.result}</td>
-            </tr>
-            `;
+    document.getElementById("netPnl").innerText =
+        data.net_pnl;
+}
 
-        });
 
-        document.getElementById("tradeTable").innerHTML = table;
+async function loadHistory() {
 
-        // Scanner
-        const scannerResponse = await fetch("/api/scanner");
-        const scanner = await scannerResponse.json();
+    const response = await fetch("/api/history");
+    const history = await response.json();
 
-        let scanHTML = "";
+    const table =
+        document.getElementById("tradeTable");
 
-        scanner.forEach((s) => {
+    table.innerHTML = "";
 
-            scanHTML += `
-            <p>
-                ${s.symbol}
-                |
-                ${s.signal}
-                |
-                Confidence ${s.confidence}%
-            </p>
-            `;
+    let labels = [];
+    let pnl = [];
 
-        });
+    history.forEach((trade) => {
 
-        document.getElementById("scannerSignals").innerHTML =
-            scanHTML || "No Signals";
+        table.innerHTML += `
+        <tr>
+            <td>${trade.symbol}</td>
+            <td>${trade.side}</td>
+            <td>${trade.entry}</td>
+            <td>${trade.exit}</td>
+            <td>${trade.pnl}</td>
+            <td>${trade.status}</td>
+        </tr>
+        `;
 
-        // Equity Chart
-        const pnlData = history.map(x => x.pnl);
-        const labels = history.map(x => x.id);
+        labels.push(trade.symbol);
+        pnl.push(trade.pnl);
 
-        if (chart !== null) {
-            chart.destroy();
-        }
+    });
 
-        chart = new Chart(document.getElementById("equityChart"), {
-
-            type: "line",
-
-            data: {
-
-                labels: labels,
-
-                datasets: [{
-
-                    label: "Equity",
-
-                    data: pnlData,
-
-                    borderWidth: 3,
-
-                    fill: false
-
-                }]
-
-            },
-
-            options: {
-
-                responsive: true,
-
-                maintainAspectRatio: false
-
-            }
-
-        });
-
-    }
-
-    catch (err) {
-
-        console.log(err);
-
-    }
+    drawChart(labels, pnl);
 
 }
 
-loadDashboard();
 
-setInterval(loadDashboard, 10000);
+async function loadScanner() {
+
+    const response =
+        await fetch("/api/scanner");
+
+    const data =
+        await response.json();
+
+    const scanner =
+        document.getElementById("scanner");
+
+    scanner.innerHTML = "";
+
+    data.forEach((item)=>{
+
+        scanner.innerHTML += `
+        <div class="scanner-card">
+
+            <h3>${item.symbol}</h3>
+
+            <h2>${item.signal}</h2>
+
+            <p>${item.strength}</p>
+
+        </div>
+        `;
+
+    });
+
+}
+
+
+function drawChart(labels,data){
+
+    const ctx =
+    document.getElementById("equityChart");
+
+    if(equityChart){
+        equityChart.destroy();
+    }
+
+    equityChart =
+    new Chart(ctx,{
+
+        type:"line",
+
+        data:{
+
+            labels:labels,
+
+            datasets:[{
+
+                label:"PnL",
+
+                data:data
+
+            }]
+        }
+
+    });
+
+}
+
+
+async function refreshDashboard(){
+
+    await loadStats();
+
+    await loadHistory();
+
+    await loadScanner();
+
+}
+
+
+refreshDashboard();
+
+setInterval(refreshDashboard,10000);
