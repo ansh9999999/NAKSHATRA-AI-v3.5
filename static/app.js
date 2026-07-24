@@ -1,35 +1,41 @@
-// ===============================
+// ======================================
 // NAKSHATRA AI Dashboard v2.0
 // static/app.js
-// ===============================
+// ======================================
 
 let equityChart = null;
 
+// =======================
+// Dashboard Stats
+// =======================
 async function loadStats() {
 
     const response = await fetch("/stats");
     const data = await response.json();
 
-    document.getElementById("totalTrades").innerText =
+    document.getElementById("totalTrades").textContent =
         data.total_trades;
 
-    document.getElementById("wins").innerText =
+    document.getElementById("wins").textContent =
         data.wins;
 
-    document.getElementById("losses").innerText =
+    document.getElementById("losses").textContent =
         data.losses;
 
-    document.getElementById("openTrades").innerText =
+    document.getElementById("openTrades").textContent =
         data.open_trades;
 
-    document.getElementById("winRate").innerText =
+    document.getElementById("winRate").textContent =
         data.win_rate + "%";
 
-    document.getElementById("netPnl").innerText =
-        data.net_pnl;
+    document.getElementById("netPnl").textContent =
+        "₹" + data.net_pnl;
+
 }
 
-
+// =======================
+// Trade History
+// =======================
 async function loadHistory() {
 
     const response = await fetch("/api/history");
@@ -40,13 +46,14 @@ async function loadHistory() {
 
     table.innerHTML = "";
 
-    let labels = [];
-    let pnl = [];
+    const labels = [];
+    const pnl = [];
 
-    history.forEach((trade) => {
+    history.forEach((trade, index) => {
 
         table.innerHTML += `
         <tr>
+            <td>${index + 1}</td>
             <td>${trade.symbol}</td>
             <td>${trade.side}</td>
             <td>${trade.entry}</td>
@@ -65,7 +72,9 @@ async function loadHistory() {
 
 }
 
-
+// =======================
+// Scanner
+// =======================
 async function loadScanner() {
 
     const response =
@@ -75,11 +84,11 @@ async function loadScanner() {
         await response.json();
 
     const scanner =
-        document.getElementById("scanner");
+        document.getElementById("scannerSignals");
 
     scanner.innerHTML = "";
 
-    data.forEach((item)=>{
+    data.forEach((item) => {
 
         scanner.innerHTML += `
         <div class="scanner-card">
@@ -97,50 +106,88 @@ async function loadScanner() {
 
 }
 
-
-function drawChart(labels,data){
+// =======================
+// Equity Chart
+// =======================
+function drawChart(labels, values) {
 
     const ctx =
-    document.getElementById("equityChart");
+        document.getElementById("equityChart");
 
-    if(equityChart){
+    if (equityChart) {
         equityChart.destroy();
     }
 
-    equityChart =
-    new Chart(ctx,{
+    equityChart = new Chart(ctx, {
 
-        type:"line",
+        type: "line",
 
-        data:{
+        data: {
 
-            labels:labels,
+            labels: labels,
 
-            datasets:[{
+            datasets: [
 
-                label:"PnL",
+                {
+                    label: "PnL",
 
-                data:data
+                    data: values,
 
-            }]
+                    tension: 0.3,
+
+                    fill: false
+
+                }
+
+            ]
+
+        },
+
+        options: {
+
+            responsive: true,
+
+            maintainAspectRatio: false
+
         }
 
     });
 
 }
 
+// =======================
+// Refresh Dashboard
+// =======================
+async function refreshDashboard() {
 
-async function refreshDashboard(){
+    try {
 
-    await loadStats();
+        await loadStats();
 
-    await loadHistory();
+        await loadHistory();
 
-    await loadScanner();
+        await loadScanner();
+
+    }
+
+    catch (error) {
+
+        console.error(
+            "Dashboard Error:",
+            error
+        );
+
+    }
 
 }
 
+// =======================
+// Auto Refresh
+// =======================
 
 refreshDashboard();
 
-setInterval(refreshDashboard,10000);
+setInterval(
+    refreshDashboard,
+    10000
+);
