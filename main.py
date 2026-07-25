@@ -95,7 +95,7 @@ def open_trades():
         "count": len(data),
         "trades": data
     }
- @app.get("/stats")
+@app.get("/stats")
 def stats():
 
     trades = get_all_trades()
