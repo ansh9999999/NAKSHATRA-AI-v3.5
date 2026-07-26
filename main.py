@@ -48,12 +48,13 @@ app.mount(
 
 @app.get("/dashboard", response_class=HTMLResponse)
 async def dashboard(request: Request):
-
     return templates.TemplateResponse(
-        "dashboard.html",
-        {
+        request=request,
+        name="dashboard.html",
+        context={
             "request": request
         }
+    )
     )
 
 
