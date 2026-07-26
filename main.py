@@ -49,6 +49,7 @@ app.mount(
 @app.get("/dashboard", response_class=HTMLResponse)
 async def dashboard(request: Request):
     return templates.TemplateResponse(
+        request=request,    
         name="dashboard.html",
         context={"request": request}
     )
@@ -94,7 +95,6 @@ def open_trades():
     }
 @app.get("/stats")
 def stats():
-
     trades = get_all_trades()
 
     total = len(trades)
