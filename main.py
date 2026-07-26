@@ -52,8 +52,6 @@ async def dashboard(request: Request):
         name="dashboard.html",
         context={"request": request}
     )
-    )
-    )
 
 
 @app.get("/")
