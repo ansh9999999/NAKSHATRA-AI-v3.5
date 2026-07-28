@@ -1,23 +1,37 @@
 """
 NAKSHATRA AI
-Numerology Engine
+Numerology Engine v4.0
 """
 
 from datetime import datetime
 
 
-def reduce_number(number):
+def digital_root(number):
 
-    while number > 9 and number not in (11, 22, 33):
-        number = sum(int(d) for d in str(number))
+    while number > 9:
+        number = sum(int(i) for i in str(number))
 
     return number
 
 
-def get_universal_day(timestamp):
+def analyze_numerology(timestamp, symbol="BTCUSD"):
+
+    """
+    Returns
+
+    {
+        bias,
+        score,
+        reasons
+    }
+    """
 
     if isinstance(timestamp, str):
         timestamp = datetime.fromisoformat(timestamp)
+
+    # -----------------------------
+    # Universal Day Number
+    # -----------------------------
 
     total = (
         timestamp.day +
@@ -25,62 +39,90 @@ def get_universal_day(timestamp):
         timestamp.year
     )
 
-    return reduce_number(total)
+    day_number = digital_root(total)
 
-
-def get_symbol_number(symbol):
-
-    symbol = symbol.upper()
-
-    total = 0
-
-    for ch in symbol:
-
-        if "A" <= ch <= "Z":
-            total += ord(ch) - 64
-
-        elif ch.isdigit():
-            total += int(ch)
-
-    return reduce_number(total)
-
-
-def analyze_numerology(timestamp, symbol="BTCUSD"):
-
-    day = get_universal_day(timestamp)
-
-    symbol_no = get_symbol_number(symbol)
-
-    score = 0
+    score = 50
+    bias = "NEUTRAL"
 
     reasons = []
 
-    if day in [1, 3, 5, 8]:
+    # -----------------------------
+    # Universal Day
+    # -----------------------------
+
+    if day_number in [1, 3, 5, 8]:
+
+        score += 20
+        bias = "POSITIVE"
+
+        reasons.append(
+            f"Universal Day Number {day_number} is positive"
+        )
+
+    elif day_number in [4, 7]:
+
+        score -= 15
+
+        reasons.append(
+            f"Universal Day Number {day_number} indicates caution"
+        )
+
+    elif day_number in [2, 6, 9]:
+
+        score += 10
+
+        reasons.append(
+            f"Universal Day Number {day_number} is supportive"
+        )
+
+    # -----------------------------
+    # Symbol Vibration
+    # -----------------------------
+
+    symbol = symbol.upper()
+
+    if "BTC" in symbol:
 
         score += 5
 
-        reasons.append(f"Universal Day {day} Positive")
+        reasons.append(
+            "BTC vibration bonus"
+        )
 
-    elif day in [4, 7]:
-
-        score -= 5
-
-        reasons.append(f"Universal Day {day} Weak")
-
-    if symbol_no in [1, 5, 8]:
+    elif "ETH" in symbol:
 
         score += 5
 
-        reasons.append(f"Symbol Number {symbol_no} Strong")
+        reasons.append(
+            "ETH vibration bonus"
+        )
+
+    # -----------------------------
+    # Clamp
+    # -----------------------------
+
+    score = max(0, min(100, score))
+
+    if score >= 70:
+        bias = "POSITIVE"
+
+    elif score <= 35:
+        bias = "NEGATIVE"
 
     return {
 
-        "universal_day": day,
-
-        "symbol_number": symbol_no,
+        "bias": bias,
 
         "score": score,
 
-        "reasons": reasons
+        "reasons": reasons,
+
+        "details": {
+
+            "day_number": day_number,
+
+            "symbol": symbol
+
+        }
 
     }
