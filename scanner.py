@@ -1,48 +1,84 @@
 from config import SYMBOLS
 from history import get_multi_timeframe_history
+
 from analysis.signal import generate_signal
-from risk.trade_manager import create_trade
-from database.logger import log_trade
+
 from telegram import send_message
 from notify import send_notification
+
 from logger import logger
-from broker.manager import broker
 
 last_alerts = {}
 
 
-def create_message(symbol, result, trade):
-    return (
-        f"NAKSHATRA AI\n"
-        f"Symbol: {symbol}\n"
-        f"Grade: {result['grade']}\n"
-        f"Signal: {trade['signal']}\n"
-        f"Confidence: {result['confidence']}%\n"
-        f"Entry: {trade['entry']}\n"
-        f"Stop Loss: {trade['stop_loss']}\n"
-        f"TP1: {trade['tp1']}\n"
-        f"TP2: {trade['tp2']}\n"
-        f"TP3: {trade['tp3']}\n"
-        f"Quantity: {trade['quantity']}\n"
-        f"Risk Reward: {trade['risk_reward']}"
-    )
+def create_message(result):
 
+    technical = result["technical"]
+    astrology = result["astrology"]
+    numerology = result["numerology"]
 
-def execute_trade(symbol, signal, trade):
-    side = "sell" if "SELL" in signal.upper() else "buy"
+    msg = f"""
+============================
 
-    return broker.place_order(
-        symbol=symbol,
-        side=side,
-        quantity=trade["quantity"],
-        price=trade["entry"],
-        order_type="market"
-    )
+NAKSHATRA AI
+
+============================
+
+Symbol : {result['symbol']}
+
+Price : {result['price']}
+
+--------------------------------
+
+TECHNICAL ANALYSIS
+
+Signal : {technical['signal']}
+
+Confidence : {technical['confidence']}%
+
+--------------------------------
+
+ASTROLOGICAL ANALYSIS
+
+Bias : {astrology['bias']}
+
+Score : {astrology['score']}%
+
+--------------------------------
+
+NUMEROLOGY ANALYSIS
+
+Bias : {numerology['bias']}
+
+Score : {numerology['score']}%
+
+--------------------------------
+
+FINAL RECOMMENDATION
+
+{result['recommendation']}
+
+Overall Confidence
+
+{result['overall_confidence']}%
+
+Bullish Agreement
+
+{result['agreement']['bullish']}/3
+
+Bearish Agreement
+
+{result['agreement']['bearish']}/3
+
+================================
+"""
+
+    return msg
 
 
 def market_scan():
 
-    logger.info("NAKSHATRA AI Scan Started")
+    logger.info("NAKSHATRA Scan Started")
 
     for symbol in SYMBOLS:
 
@@ -55,66 +91,37 @@ def market_scan():
 
             result = generate_signal(data)
 
-            signal = result["signal"]
+            recommendation = result["recommendation"]
 
-            if signal == "WAIT":
+            if recommendation == "MIXED / MANUAL REVIEW":
                 continue
 
-            if result["grade"] not in ["A+", "A"]:
-                logger.info(f"{symbol} skipped ({result['grade']})")
+            if last_alerts.get(symbol) == recommendation:
                 continue
 
-            if last_alerts.get(symbol) == signal:
-                continue
+            last_alerts[symbol] = recommendation
 
-            last_alerts[symbol] = signal
+            message = create_message(result)
 
-            trade = create_trade(
-                signal=signal,
-                entry_price=result["price"],
-                atr=result["momentum"]["atr"]
-            )
+            logger.info(message)
 
-            if trade is None:
-                continue
-
-            logger.info(execute_trade(symbol, signal, trade))
-
-            try:
-                log_trade(
-                    symbol=symbol,
-                    signal_data=result,
-                    trade=trade
-                )
-            except Exception as e:
-                logger.exception(e)
-
-            msg = create_message(symbol, result, trade)
-
-            send_message(msg)
+            send_message(message)
 
             send_notification(
-                title=f"{symbol} {signal}",
-                message=msg
+
+                title=f"{symbol} {recommendation}",
+
+                message=message
+
             )
 
         except Exception as e:
+
             logger.exception(f"{symbol}: {e}")
 
-    logger.info("NAKSHATRA AI Scan Finished")
-
-
-def broker_health():
-    try:
-        return broker.health()
-    except Exception as e:
-        logger.exception(e)
-        return False
+    logger.info("NAKSHATRA Scan Finished")
 
 
 if __name__ == "__main__":
 
-    if broker_health():
-        market_scan()
-    else:
-        logger.error("Broker Connection Failed")
+    market_scan()
