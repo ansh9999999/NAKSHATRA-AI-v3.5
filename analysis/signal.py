@@ -1,6 +1,6 @@
 """
 NAKSHATRA AI
-Master Signal Engine
+Master Signal Engine v4.0
 """
 
 from analysis.trend_engine import analyze_multi_timeframe
@@ -13,25 +13,6 @@ from analysis.numerology_engine import analyze_numerology
 
 
 def generate_signal(data):
-    """
-    data = {
-        "5m": DataFrame,
-        "15m": DataFrame,
-        "1h": DataFrame,
-        "1d": DataFrame,
-        "1w": DataFrame,
-        "1mo": DataFrame,
-
-        # Optional
-        "symbol": "BTCUSD"
-    }
-    """
-
-    # ---------------------------------
-    # Trend Analysis
-    # ---------------------------------
-
-    trend_result = analyze_multi_timeframe(data)
 
     # ---------------------------------
     # Entry Timeframe
@@ -41,24 +22,62 @@ def generate_signal(data):
 
     if entry_df.empty:
         return {
-            "signal": "WAIT",
-            "confidence": 0,
-            "score": 0,
-            "grade": "REJECT",
-            "reasons": ["No Entry Data"]
+            "recommendation": "NO DATA",
+            "overall_confidence": 0
         }
 
     # ---------------------------------
-    # Momentum
+    # Technical Engines
     # ---------------------------------
+
+    trend_result = analyze_multi_timeframe(data)
 
     momentum_result = analyze_momentum(entry_df)
 
+    smart_money_result = analyze_smart_money(entry_df)
+
     # ---------------------------------
-    # Smart Money
+    # Technical Score
     # ---------------------------------
 
-    smart_money_result = analyze_smart_money(entry_df)
+    technical_score = (
+        trend_result["total_score"]
+        + momentum_result["score"]
+        + smart_money_result["score"]
+    )
+
+    technical_score = max(0, min(100, abs(technical_score)))
+
+    # ---------------------------------
+    # Technical Signal
+    # ---------------------------------
+
+    if technical_score >= 85:
+        technical_signal = "BUY"
+
+    elif technical_score <= 25:
+        technical_signal = "SELL"
+
+    else:
+        technical_signal = "NEUTRAL"
+
+    technical_result = {
+
+        "signal": technical_signal,
+
+        "confidence": technical_score,
+
+        "trend": trend_result,
+
+        "momentum": momentum_result,
+
+        "smart_money": smart_money_result,
+
+        "reasons":
+            trend_result["reasons"]
+            + momentum_result["reasons"]
+            + smart_money_result["reasons"]
+    }
 
     # ---------------------------------
     # Time
@@ -72,13 +91,13 @@ def generate_signal(data):
     symbol = data.get("symbol", "BTCUSD")
 
     # ---------------------------------
-    # Lunar Engine
+    # Astrology
     # ---------------------------------
 
-    lunar_result = analyze_lunar(timestamp)
+    astrology_result = analyze_lunar(timestamp)
 
     # ---------------------------------
-    # Numerology Engine
+    # Numerology
     # ---------------------------------
 
     numerology_result = analyze_numerology(
@@ -87,85 +106,29 @@ def generate_signal(data):
     )
 
     # ---------------------------------
-    # Confidence Engine
+    # Final Recommendation
     # ---------------------------------
 
-    final_result = calculate_confidence(
-        trend_result,
-        momentum_result,
-        smart_money_result
+    result = calculate_confidence(
+
+        technical_result,
+
+        astrology_result,
+
+        numerology_result
+
     )
 
     # ---------------------------------
-    # Extra Scores
+    # Extra Information
     # ---------------------------------
 
-    final_result["score"] += lunar_result["score"]
-    final_result["score"] += numerology_result["score"]
+    result["symbol"] = symbol
 
-    confidence = (
-        final_result["confidence"]
-        + lunar_result["score"]
-        + numerology_result["score"]
+    result["price"] = float(
+        entry_df["close"].iloc[-1]
     )
 
-    confidence = max(0, min(100, confidence))
+    result["time"] = str(timestamp)
 
-    final_result["confidence"] = confidence
-
-    # ---------------------------------
-    # Grade
-    # ---------------------------------
-
-    if confidence >= 90:
-        grade = "A+"
-
-    elif confidence >= 80:
-        grade = "A"
-
-    elif confidence >= 70:
-        grade = "B"
-
-    elif confidence >= 60:
-        grade = "C"
-
-    else:
-        grade = "REJECT"
-
-    final_result["grade"] = grade
-
-    # ---------------------------------
-    # Price
-    # ---------------------------------
-
-    price = float(entry_df["close"].iloc[-1])
-
-    final_result["price"] = round(price, 2)
-
-    # ---------------------------------
-    # Attach Results
-    # ---------------------------------
-
-    final_result["trend"] = trend_result
-
-    final_result["momentum"] = momentum_result
-
-    final_result["smart_money"] = smart_money_result
-
-    final_result["lunar"] = lunar_result
-
-    final_result["numerology"] = numerology_result
-
-    # ---------------------------------
-    # Reasons
-    # ---------------------------------
-
-    reasons = []
-
-    reasons.extend(final_result.get("reasons", []))
-    reasons.extend(lunar_result.get("reasons", []))
-    reasons.extend(numerology_result.get("reasons", []))
-
-    final_result["reasons"] = reasons
-
-    return final_result
+    return result
