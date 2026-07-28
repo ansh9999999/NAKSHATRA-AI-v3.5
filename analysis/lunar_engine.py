@@ -1,59 +1,85 @@
 """
 NAKSHATRA AI
-Lunar Engine
+Lunar Engine v4.0
 """
 
-from analysis.moon_phase import get_moon_phase
-from analysis.nakshatra import get_nakshatra
-from analysis.tithi import get_tithi
-from analysis.rahu import get_rahu_kaal
+from datetime import datetime
 
 
 def analyze_lunar(timestamp):
 
-    moon = get_moon_phase(timestamp)
+    """
+    Returns:
 
-    nakshatra = get_nakshatra(timestamp)
+    {
+        bias,
+        score,
+        reasons
+    }
+    """
 
-    tithi = get_tithi(timestamp)
+    if isinstance(timestamp, str):
+        timestamp = datetime.fromisoformat(timestamp)
 
-    rahu = get_rahu_kaal(timestamp)
+    day = timestamp.day
 
-    score = 0
-
+    score = 50
+    bias = "NEUTRAL"
     reasons = []
 
-    if moon["bullish"]:
-        score += 10
-        reasons.append(moon["reason"])
+    # --------------------------------
+    # Example Logic
+    # (Temporary)
+    # --------------------------------
 
-    else:
-        score -= 10
+    if 1 <= day <= 5:
 
-    if nakshatra["bullish"]:
-        score += 10
-        reasons.append(nakshatra["reason"])
+        score += 20
+        bias = "BULLISH"
 
-    if tithi["bullish"]:
-        score += 5
-        reasons.append(tithi["reason"])
+        reasons.append(
+            "Early lunar cycle supports bullish momentum"
+        )
 
-    if rahu["active"]:
-        score -= 15
-        reasons.append("Rahu Kaal Active")
+    elif 13 <= day <= 17:
+
+        score += 15
+
+        reasons.append(
+            "Full moon zone may increase volatility"
+        )
+
+    elif 27 <= day <= 30:
+
+        score -= 20
+        bias = "BEARISH"
+
+        reasons.append(
+            "End of lunar cycle indicates weakness"
+        )
+
+    # ------------------------------
+
+    score = max(0, min(100, score))
+
+    if score >= 70 and bias == "NEUTRAL":
+        bias = "BULLISH"
+
+    elif score <= 35:
+        bias = "BEARISH"
 
     return {
 
+        "bias": bias,
+
         "score": score,
 
-        "moon": moon,
+        "reasons": reasons,
 
-        "nakshatra": nakshatra,
+        "details": {
 
-        "tithi": tithi,
+            "day": day
 
-        "rahu": rahu,
-
-        "reasons": reasons
+        }
 
     }
