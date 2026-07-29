@@ -1,59 +1,61 @@
 """
 NAKSHATRA AI
-Astrology Engine v5.0
+Astrology Engine v5.1
 """
 
-from analysis.moon_phase import analyze_moon_phase
-from analysis.nakshatra import analyze_nakshatra
-from analysis.tithi import analyze_tithi
-from analysis.rahu import analyze_rahu
+from analysis.moon_phase import get_moon_phase
+from analysis.nakshatra import get_nakshatra
+from analysis.tithi import get_tithi
+from analysis.rahu import get_rahu_kaal
 
 
 def analyze_astrology(timestamp):
 
-    moon = analyze_moon_phase(timestamp)
-    nakshatra = analyze_nakshatra(timestamp)
-    tithi = analyze_tithi(timestamp)
-    rahu = analyze_rahu(timestamp)
+    moon = get_moon_phase(timestamp)
+    nakshatra = get_nakshatra(timestamp)
+    tithi = get_tithi(timestamp)
+    rahu = get_rahu_kaal(timestamp)
 
     score = 0
     reasons = []
 
-    score += moon.get("score", 0)
-    score += nakshatra.get("score", 0)
-    score += tithi.get("score", 0)
-    score += rahu.get("score", 0)
+    # Moon
+    if moon.get("bullish", False):
+        score += 25
+    reasons.append(moon.get("reason", ""))
 
-    score = round(score / 4)
+    # Nakshatra
+    if nakshatra.get("bullish", False):
+        score += 25
+    reasons.append(nakshatra.get("reason", ""))
 
-    reasons.extend(moon.get("reasons", []))
-    reasons.extend(nakshatra.get("reasons", []))
-    reasons.extend(tithi.get("reasons", []))
-    reasons.extend(rahu.get("reasons", []))
+    # Tithi
+    if tithi.get("bullish", False):
+        score += 25
+    reasons.append(tithi.get("reason", ""))
 
-    reasons = list(dict.fromkeys(reasons))
+    # Rahu
+    if not rahu.get("active", False):
+        score += 25
+        reasons.append("Outside Rahu Kaal")
+    else:
+        reasons.append("Rahu Kaal Active")
+
+    reasons = [r for r in reasons if r]
 
     if score >= 70:
         bias = "BULLISH"
-    elif score <= 35:
+    elif score <= 30:
         bias = "BEARISH"
     else:
         bias = "NEUTRAL"
 
     return {
-
         "bias": bias,
-
         "score": score,
-
         "moon": moon,
-
         "nakshatra": nakshatra,
-
         "tithi": tithi,
-
         "rahu": rahu,
-
         "reasons": reasons
-
-  }
+    }
