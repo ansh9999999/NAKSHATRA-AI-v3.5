@@ -97,3 +97,61 @@ def vwap(high, low, close, volume):
 def volume_sma(volume, period=20):
 
     return volume.rolling(period).mean()
+# -------------------------------------
+# ADX
+# -------------------------------------
+
+def adx(high, low, close, period=14):
+
+    plus_dm = high.diff()
+    minus_dm = -low.diff()
+
+    plus_dm[plus_dm < 0] = 0
+    minus_dm[minus_dm < 0] = 0
+
+    tr = pd.concat([
+        high - low,
+        (high - close.shift()).abs(),
+        (low - close.shift()).abs()
+    ], axis=1).max(axis=1)
+
+    atr = tr.rolling(period).mean()
+
+    plus_di = 100 * (plus_dm.rolling(period).mean() / atr)
+    minus_di = 100 * (minus_dm.rolling(period).mean() / atr)
+
+    dx = (
+        (plus_di - minus_di).abs()
+        / (plus_di + minus_di)
+    ) * 100
+
+    return dx.rolling(period).mean()
+
+
+# -------------------------------------
+# Bollinger Bands
+# -------------------------------------
+
+def bollinger_bands(series, period=20, std=2):
+
+    sma = series.rolling(period).mean()
+    deviation = series.rolling(period).std()
+
+    upper = sma + std * deviation
+    lower = sma - std * deviation
+
+    return upper, sma, lower
+
+
+# -------------------------------------
+# EMA Alignment
+# -------------------------------------
+
+def ema_alignment(close):
+
+    e9 = ema(close, 9).iloc[-1]
+    e20 = ema(close, 20).iloc[-1]
+    e50 = ema(close, 50).iloc[-1]
+    e200 = ema(close, 200).iloc[-1]
+
+    return e9 > e20 > e50 > e200
