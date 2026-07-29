@@ -1,65 +1,28 @@
 """
 NAKSHATRA AI
-Nakshatra Engine
+Nakshatra Engine v5.1
 """
 
 from datetime import datetime
 
-
 NAKSHATRAS = [
-
-    "Ashwini",
-    "Bharani",
-    "Krittika",
-    "Rohini",
-    "Mrigashira",
-    "Ardra",
-    "Punarvasu",
-    "Pushya",
-    "Ashlesha",
-    "Magha",
-    "Purva Phalguni",
-    "Uttara Phalguni",
-    "Hasta",
-    "Chitra",
-    "Swati",
-    "Vishakha",
-    "Anuradha",
-    "Jyeshtha",
-    "Mula",
-    "Purva Ashadha",
-    "Uttara Ashadha",
-    "Shravana",
-    "Dhanishta",
-    "Shatabhisha",
-    "Purva Bhadrapada",
-    "Uttara Bhadrapada",
-    "Revati"
-
+    "Ashwini", "Bharani", "Krittika", "Rohini",
+    "Mrigashira", "Ardra", "Punarvasu", "Pushya",
+    "Ashlesha", "Magha", "Purva Phalguni", "Uttara Phalguni",
+    "Hasta", "Chitra", "Swati", "Vishakha",
+    "Anuradha", "Jyeshtha", "Mula", "Purva Ashadha",
+    "Uttara Ashadha", "Shravana", "Dhanishta", "Shatabhisha",
+    "Purva Bhadrapada", "Uttara Bhadrapada", "Revati"
 ]
 
-
-BULLISH = {
-
-    "Ashwini",
+BULLISH = [
     "Rohini",
     "Pushya",
     "Hasta",
     "Anuradha",
     "Shravana",
     "Revati"
-
-}
-
-
-BEARISH = {
-
-    "Ardra",
-    "Ashlesha",
-    "Jyeshtha",
-    "Mula"
-
-}
+]
 
 
 def get_nakshatra(timestamp):
@@ -67,50 +30,22 @@ def get_nakshatra(timestamp):
     if isinstance(timestamp, str):
         timestamp = datetime.fromisoformat(timestamp)
 
-    # -----------------------------------
-    # Temporary Placeholder
-    # Swiss Ephemeris integration later
-    # -----------------------------------
+    index = (timestamp.day - 1) % 27
+    nakshatra = NAKSHATRAS[index]
 
-    index = timestamp.day % 27
+    bullish = nakshatra in BULLISH
 
-    name = NAKSHATRAS[index]
-
-    bullish = False
-
-    score = 0
-
-    reason = "Neutral Nakshatra"
-
-    if name in BULLISH:
-
-        bullish = True
-
-        score = 10
-
-        reason = "Historically Bullish Nakshatra"
-
-    elif name in BEARISH:
-
-        bullish = False
-
-        score = -10
-
-        reason = "Historically Weak Nakshatra"
+    if bullish:
+        score = 80
+        reason = f"{nakshatra} supports bullish trading."
+    else:
+        score = 40
+        reason = f"{nakshatra} is neutral/bearish."
 
     return {
-
-        "name": name,
-
+        "nakshatra": nakshatra,
         "bullish": bullish,
-
         "score": score,
-
-        "reason": reason
-
+        "reason": reason,
+        "reasons": [reason]
     }
-
-
-def get_all_nakshatras():
-
-    return NAKSHATRAS
