@@ -6,7 +6,7 @@ Master Signal Engine v4.0
 from analysis.trend_engine import analyze_multi_timeframe
 from analysis.momentum_engine import analyze_momentum
 from analysis.smart_money_engine import analyze_smart_money
-from analysis.confidence_engine import calculate_confidence
+from analysis.confidence_engine import calculate_decision
 
 from analysis.lunar_engine import analyze_lunar
 from analysis.numerology_engine import analyze_numerology
@@ -109,7 +109,7 @@ def generate_signal(data):
     # Final Recommendation
     # ---------------------------------
 
-    result = calculate_confidence(
+    result = calculate_decision(
 
         technical_result,
 
