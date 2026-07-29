@@ -8,7 +8,7 @@ from analysis.momentum_engine import analyze_momentum
 from analysis.smart_money_engine import analyze_smart_money
 from analysis.confidence_engine import calculate_decision
 
-from analysis.lunar_engine import analyze_lunar
+from analysis.astrology_engine import analyze_astrology
 from analysis.numerology_engine import analyze_numerology
 
 
@@ -94,7 +94,7 @@ def generate_signal(data):
     # Astrology
     # ---------------------------------
 
-    astrology_result = analyze_lunar(timestamp)
+    astrology_result = analyze_astrology(timestamp)
 
     # ---------------------------------
     # Numerology
