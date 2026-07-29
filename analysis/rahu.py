@@ -1,34 +1,9 @@
 """
 NAKSHATRA AI
-Rahu Kaal Engine
+Rahu Kaal Engine v5.1
 """
 
 from datetime import datetime, time
-
-
-# --------------------------------------------------
-# Default Rahu Kaal (Indian Standard Time)
-# Placeholder values
-# Future version will calculate dynamically
-# --------------------------------------------------
-
-RAHU_KAAL = {
-
-    0: (time(7, 30), time(9, 0)),     # Monday
-
-    1: (time(15, 0), time(16, 30)),   # Tuesday
-
-    2: (time(12, 0), time(13, 30)),   # Wednesday
-
-    3: (time(13, 30), time(15, 0)),   # Thursday
-
-    4: (time(10, 30), time(12, 0)),   # Friday
-
-    5: (time(9, 0), time(10, 30)),    # Saturday
-
-    6: (time(16, 30), time(18, 0))    # Sunday
-
-}
 
 
 def get_rahu_kaal(timestamp):
@@ -36,50 +11,29 @@ def get_rahu_kaal(timestamp):
     if isinstance(timestamp, str):
         timestamp = datetime.fromisoformat(timestamp)
 
-    weekday = timestamp.weekday()
+    current_time = timestamp.time()
 
-    start, end = RAHU_KAAL[weekday]
+    # Placeholder Rahu Kaal
+    # Future: Replace with location-based calculation
 
-    current = timestamp.time()
+    rahu_start = time(13, 30)
+    rahu_end = time(15, 0)
 
-    active = start <= current <= end
-
-    score = -15 if active else 0
+    active = rahu_start <= current_time <= rahu_end
 
     if active:
-        reason = "Rahu Kaal Active"
+        score = 20
+        bullish = False
+        reason = "Rahu Kaal active. Avoid fresh entries."
     else:
-        reason = "Outside Rahu Kaal"
+        score = 80
+        bullish = True
+        reason = "Outside Rahu Kaal."
 
     return {
-
-        "weekday": weekday,
-
-        "start": start.strftime("%H:%M"),
-
-        "end": end.strftime("%H:%M"),
-
         "active": active,
-
+        "bullish": bullish,
         "score": score,
-
-        "reason": reason
-
-    }
-
-
-def get_all_rahu_timings():
-
-    return {
-
-        day: {
-
-            "start": timing[0].strftime("%H:%M"),
-
-            "end": timing[1].strftime("%H:%M")
-
+        "reason": reason,
+        "reasons": [reason]
         }
-
-        for day, timing in RAHU_KAAL.items()
-
-    }
