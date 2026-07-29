@@ -75,3 +75,25 @@ def trend_strength(close):
         return "BEAR"
 
     return "SIDEWAYS"
+    # -------------------------------------
+# VWAP
+# -------------------------------------
+
+def vwap(high, low, close, volume):
+
+    typical_price = (high + low + close) / 3
+
+    return (
+        (typical_price * volume).cumsum()
+        /
+        volume.cumsum()
+    )
+
+
+# -------------------------------------
+# Volume SMA
+# -------------------------------------
+
+def volume_sma(volume, period=20):
+
+    return volume.rolling(period).mean()
