@@ -1,6 +1,6 @@
 """
 NAKSHATRA AI
-Moon Phase Engine
+Moon Phase Engine v5.1
 """
 
 from datetime import datetime
@@ -13,49 +13,53 @@ def get_moon_phase(timestamp):
 
     day = timestamp.day
 
-    phase = "UNKNOWN"
-    bullish = False
-    reason = ""
-
-    # Temporary Logic
-    # Swiss Ephemeris integration will replace this
-
-    if day in [13, 14, 15]:
-        phase = "FULL MOON"
+    # Approximate Moon Cycle
+    if 1 <= day <= 3:
+        phase = "New Moon"
         bullish = False
-        reason = "Full Moon - High Emotional Volatility"
+        score = 20
+        reason = "Weak market energy near New Moon"
 
-    elif day in [28, 29, 30, 1]:
-        phase = "NEW MOON"
+    elif 4 <= day <= 7:
+        phase = "Waxing Crescent"
         bullish = True
-        reason = "New Moon - Fresh Trend Potential"
+        score = 70
+        reason = "Bullish momentum building"
 
-    elif 2 <= day <= 7:
-        phase = "WAXING CRESCENT"
+    elif 8 <= day <= 10:
+        phase = "First Quarter"
         bullish = True
-        reason = "Bullish Momentum Building"
+        score = 80
+        reason = "Strong directional movement"
 
-    elif 8 <= day <= 12:
-        phase = "FIRST QUARTER"
-        bullish = True
-        reason = "Trend Continuation"
-
-    elif 16 <= day <= 21:
-        phase = "WANING GIBBOUS"
+    elif 11 <= day <= 15:
+        phase = "Full Moon"
         bullish = False
-        reason = "Profit Booking Zone"
+        score = 40
+        reason = "High volatility around Full Moon"
 
-    elif 22 <= day <= 27:
-        phase = "LAST QUARTER"
+    elif 16 <= day <= 20:
+        phase = "Waning Gibbous"
         bullish = False
-        reason = "Weak Momentum"
+        score = 45
+        reason = "Profit booking possible"
+
+    elif 21 <= day <= 24:
+        phase = "Last Quarter"
+        bullish = False
+        score = 35
+        reason = "Trend weakening"
+
+    else:
+        phase = "Waning Crescent"
+        bullish = False
+        score = 25
+        reason = "Low momentum before New Moon"
 
     return {
-
         "phase": phase,
-
         "bullish": bullish,
-
-        "reason": reason
-
-  }
+        "score": score,
+        "reason": reason,
+        "reasons": [reason]
+    }
