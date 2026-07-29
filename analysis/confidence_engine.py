@@ -1,96 +1,63 @@
-# analysis/confidence_engine.py
-
 """
 NAKSHATRA AI
-Confidence Engine v4.0
+Decision Engine v5.0
+
+Purpose:
+- NO weighted scoring
+- NO automatic BUY/SELL
+- Present Technical, Astrology and Numerology separately
+- Show whether all analyses agree
 """
 
-TECHNICAL_WEIGHT = 60
-ASTROLOGY_WEIGHT = 25
-NUMEROLOGY_WEIGHT = 15
 
-
-def calculate_confidence(
+def calculate_decision(
     technical_result,
     astrology_result,
     numerology_result
 ):
 
     # -----------------------------
-    # Scores
+    # Signals
     # -----------------------------
 
-    technical_score = max(
-        0,
-        min(100, technical_result.get("confidence", 0))
+    technical_signal = (
+        technical_result.get("signal", "NEUTRAL")
+        .upper()
     )
 
-    astrology_score = max(
-        0,
-        min(100, astrology_result.get("score", 0))
+    astrology_signal = (
+        astrology_result.get("bias", "NEUTRAL")
+        .upper()
     )
 
-    numerology_score = max(
-        0,
-        min(100, numerology_result.get("score", 0))
-    )
-
-    # -----------------------------
-    # Weighted Confidence
-    # -----------------------------
-
-    overall_confidence = round(
-        (
-            technical_score * TECHNICAL_WEIGHT
-            + astrology_score * ASTROLOGY_WEIGHT
-            + numerology_score * NUMEROLOGY_WEIGHT
-        ) / 100,
-        2
+    numerology_signal = (
+        numerology_result.get("bias", "NEUTRAL")
+        .upper()
     )
 
     # -----------------------------
     # Agreement
     # -----------------------------
 
-    bullish = 0
-    bearish = 0
+    signals = [
+        technical_signal,
+        astrology_signal,
+        numerology_signal,
+    ]
 
-    if "BUY" in technical_result.get("signal", "").upper():
-        bullish += 1
+    unique = set(signals)
 
-    elif "SELL" in technical_result.get("signal", "").upper():
-        bearish += 1
+    if len(unique) == 1:
 
-    if astrology_result.get("bias", "").upper() == "BULLISH":
-        bullish += 1
+        agreement = "FULL AGREEMENT"
 
-    elif astrology_result.get("bias", "").upper() == "BEARISH":
-        bearish += 1
+    elif len(unique) == 2:
 
-    if numerology_result.get("bias", "").upper() == "POSITIVE":
-        bullish += 1
-
-    elif numerology_result.get("bias", "").upper() == "NEGATIVE":
-        bearish += 1
-
-    # -----------------------------
-    # Final Recommendation
-    # -----------------------------
-
-    if bullish == 3:
-        recommendation = "STRONG BUY"
-
-    elif bullish == 2:
-        recommendation = "BUY BIAS"
-
-    elif bearish == 3:
-        recommendation = "STRONG SELL"
-
-    elif bearish == 2:
-        recommendation = "SELL BIAS"
+        agreement = "PARTIAL AGREEMENT"
 
     else:
-        recommendation = "MIXED / MANUAL REVIEW"
+
+        agreement = "NO AGREEMENT"
 
     # -----------------------------
     # Reasons
@@ -110,6 +77,8 @@ def calculate_confidence(
         numerology_result.get("reasons", [])
     )
 
+    reasons = list(dict.fromkeys(reasons))
+
     # -----------------------------
     # Return
     # -----------------------------
@@ -122,20 +91,14 @@ def calculate_confidence(
 
         "numerology": numerology_result,
 
-        "technical_score": technical_score,
+        "agreement": agreement,
 
-        "astrology_score": astrology_score,
+        "technical_signal": technical_signal,
 
-        "numerology_score": numerology_score,
+        "astrology_signal": astrology_signal,
 
-        "overall_confidence": overall_confidence,
-
-        "recommendation": recommendation,
-
-        "agreement": {
-            "bullish": bullish,
-            "bearish": bearish
-        },
+        "numerology_signal": numerology_signal,
 
         "reasons": reasons
+
     }
