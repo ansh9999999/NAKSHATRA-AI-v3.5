@@ -101,6 +101,7 @@ class LearningEngine:
             score -= 20
 
     return score
+    
     # -------------------------------------
     # Generic Learning Model
     # -------------------------------------
@@ -187,6 +188,7 @@ class LearningEngine:
     def symbol_weights(self):
 
     return self._calculate_weight("symbol")
+    
     # -------------------------------------
     # Confidence Band Learning
     # -------------------------------------
