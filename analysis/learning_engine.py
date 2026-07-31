@@ -100,8 +100,8 @@ class LearningEngine:
         elif expectancy < 0:
             score -= 20
 
-        return score
-            # -------------------------------------
+    return score
+    # -------------------------------------
     # Generic Learning Model
     # -------------------------------------
 
@@ -186,8 +186,8 @@ class LearningEngine:
 
     def symbol_weights(self):
 
-        return self._calculate_weight("symbol")
-            # -------------------------------------
+    return self._calculate_weight("symbol")
+    # -------------------------------------
     # Confidence Band Learning
     # -------------------------------------
 
