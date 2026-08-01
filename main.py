@@ -171,3 +171,120 @@ def api_scanner():
         }
         
     ]   
+from history import get_multi_timeframe_history
+from analysis.signal import generate_signal
+from scanner import market_scan
+
+from fastapi.responses import JSONResponse
+@app.get("/")
+def home():
+
+    return {
+        "project": "NAKSHATRA AI",
+        "version": "4.0",
+        "status": "Running",
+        "apis": [
+            "/health",
+            "/dashboard",
+            "/signal",
+            "/analysis",
+            "/scan",
+            "/stats",
+            "/trades",
+            "/open-trades"
+        ]
+    }
+ def run_analysis(symbol: str):
+
+    try:
+
+        data = get_multi_timeframe_history(symbol)
+
+        if not data:
+            return {
+                "status": "No Data"
+            }
+
+        result = generate_signal(data)
+
+        return result
+
+    except Exception as e:
+
+        return {
+            "status": "ERROR",
+            "message": str(e)
+}
+@app.get("/signal")
+def signal():
+
+    return run_analysis("BTCUSD")
+    @app.get("/signal/{symbol}")
+def signal_symbol(symbol: str):
+
+    symbol = symbol.upper()
+
+    return run_analysis(symbol)
+    @app.get("/analysis")
+def analysis():
+
+    result = run_analysis("BTCUSD")
+
+    return JSONResponse(result)
+    @app.get("/analysis/{symbol}")
+def analysis_symbol(symbol: str):
+
+    symbol = symbol.upper()
+
+    return JSONResponse(run_analysis(symbol))
+    @app.get("/scan")
+def scan():
+
+    try:
+
+        market_scan()
+
+        return {
+            "status": "SUCCESS",
+            "message": "Market Scan Completed"
+        }
+
+    except Exception as e:
+
+        return {
+            "status": "ERROR",
+            "message": str(e)
+        }
+       @app.get("/eth")
+def eth():
+
+    return run_analysis("ETHUSD")
+@app.get("/btc")
+def btc():
+
+    return run_analysis("BTCUSD")
+@app.get("/api")
+def api():
+
+    return {
+        "project": "NAKSHATRA AI V4",
+        "available_endpoints": [
+            "/",
+            "/health",
+            "/dashboard",
+            "/stats",
+            "/trades",
+            "/open-trades",
+            "/api/history",
+            "/api/scanner",
+            "/signal",
+            "/signal/BTCUSD",
+            "/signal/ETHUSD",
+            "/analysis",
+            "/analysis/BTCUSD",
+            "/analysis/ETHUSD",
+            "/btc",
+            "/eth",
+            "/scan"
+        ]
+        }
