@@ -1,7 +1,7 @@
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -13,6 +13,10 @@ from database.models import (
     get_all_trades,
     get_open_trades,
 )
+
+from history import get_multi_timeframe_history
+from analysis.signal import generate_signal
+from scanner import market_scan
 
 
 @asynccontextmanager
@@ -46,32 +50,75 @@ app.mount(
 )
 
 
+# ==========================================================
+# Dashboard
+# ==========================================================
+
 @app.get("/dashboard", response_class=HTMLResponse)
 async def dashboard(request: Request):
+
     return templates.TemplateResponse(
-        request=request,    
+        request=request,
         name="dashboard.html",
         context={"request": request}
     )
 
 
+# ==========================================================
+# Home
+# ==========================================================
+
 @app.get("/")
 def home():
 
     return {
+
         "project": "NAKSHATRA AI",
+
         "version": "4.0",
-        "status": "Running"
+
+        "status": "Running",
+
+        "apis": [
+
+            "/health",
+
+            "/dashboard",
+
+            "/signal",
+
+            "/analysis",
+
+            "/scan",
+
+            "/stats",
+
+            "/trades",
+
+            "/open-trades",
+
+            "/api"
+
+        ]
+
     }
 
+
+# ==========================================================
+# Health
+# ==========================================================
 
 @app.get("/health")
 def health():
 
     return {
-        "status": "healthy"
-    }
 
+        "status": "healthy"
+
+    }
+    # ==========================================================
+# Trades
+# ==========================================================
 
 @app.get("/trades")
 def trades():
@@ -84,6 +131,10 @@ def trades():
     }
 
 
+# ==========================================================
+# Open Trades
+# ==========================================================
+
 @app.get("/open-trades")
 def open_trades():
 
@@ -93,15 +144,22 @@ def open_trades():
         "count": len(data),
         "trades": data
     }
+
+
+# ==========================================================
+# Statistics
+# ==========================================================
+
 @app.get("/stats")
 def stats():
+
     trades = get_all_trades()
 
     total = len(trades)
 
     wins = 0
     losses = 0
-    open_trades = 0
+    open_positions = 0
 
     total_pnl = 0
 
@@ -119,25 +177,37 @@ def stats():
             losses += 1
 
         elif result == "OPEN":
-            open_trades += 1
+            open_positions += 1
 
     win_rate = 0
 
     if wins + losses > 0:
+
         win_rate = round(
             wins / (wins + losses) * 100,
             2
         )
 
     return {
+
         "total_trades": total,
+
         "wins": wins,
+
         "losses": losses,
-        "open_trades": open_trades,
+
+        "open_trades": open_positions,
+
         "win_rate": win_rate,
+
         "net_pnl": total_pnl
+
     }
 
+
+# ==========================================================
+# Trade History
+# ==========================================================
 
 @app.get("/api/history")
 def api_history():
@@ -149,95 +219,154 @@ def api_history():
     for t in trades[-100:]:
 
         history.append({
+
             "symbol": t[1],
+
             "side": t[2],
+
             "entry": t[5],
+
             "exit": t[6],
+
             "pnl": t[8],
+
             "status": t[13]
+
         })
 
     return history
 
 
+# ==========================================================
+# Scanner
+# ==========================================================
+
 @app.get("/api/scanner")
 def api_scanner():
 
     return [
+
         {
-            "symbol": "NIFTY",
+
+            "symbol": "BTCUSD",
+
             "signal": "Waiting",
+
             "strength": "-"
+
+        },
+
+        {
+
+            "symbol": "ETHUSD",
+
+            "signal": "Waiting",
+
+            "strength": "-"
+
         }
-        
-    ]   
-from history import get_multi_timeframe_history
-from analysis.signal import generate_signal
-from scanner import market_scan
 
-from fastapi.responses import JSONResponse
-@app.get("/")
-def home():
+    ]
 
-    return {
-        "project": "NAKSHATRA AI",
-        "version": "4.0",
-        "status": "Running",
-        "apis": [
-            "/health",
-            "/dashboard",
-            "/signal",
-            "/analysis",
-            "/scan",
-            "/stats",
-            "/trades",
-            "/open-trades"
-        ]
-    }
- def run_analysis(symbol: str):
+
+# ==========================================================
+# Analysis Helper
+# ==========================================================
+
+def run_analysis(symbol: str):
 
     try:
 
         data = get_multi_timeframe_history(symbol)
 
         if not data:
+
             return {
-                "status": "No Data"
+
+                "status": "NO DATA"
+
             }
 
-        result = generate_signal(data)
-
-        return result
+        return generate_signal(data)
 
     except Exception as e:
 
         return {
+
             "status": "ERROR",
+
             "message": str(e)
-}
+
+        }
+        # ==========================================================
+# BTC Signal
+# ==========================================================
+
+@app.get("/btc")
+def btc():
+
+    return run_analysis("BTCUSD")
+
+
+# ==========================================================
+# ETH Signal
+# ==========================================================
+
+@app.get("/eth")
+def eth():
+
+    return run_analysis("ETHUSD")
+
+
+# ==========================================================
+# Default Signal
+# ==========================================================
+
 @app.get("/signal")
 def signal():
 
     return run_analysis("BTCUSD")
-    @app.get("/signal/{symbol}")
+
+
+# ==========================================================
+# Symbol Signal
+# ==========================================================
+
+@app.get("/signal/{symbol}")
 def signal_symbol(symbol: str):
 
-    symbol = symbol.upper()
+    return run_analysis(symbol.upper())
 
-    return run_analysis(symbol)
-    @app.get("/analysis")
+
+# ==========================================================
+# Analysis
+# ==========================================================
+
+@app.get("/analysis")
 def analysis():
 
-    result = run_analysis("BTCUSD")
+    return JSONResponse(
+        content=run_analysis("BTCUSD")
+    )
 
-    return JSONResponse(result)
-    @app.get("/analysis/{symbol}")
+
+# ==========================================================
+# Analysis By Symbol
+# ==========================================================
+
+@app.get("/analysis/{symbol}")
 def analysis_symbol(symbol: str):
 
-    symbol = symbol.upper()
+    return JSONResponse(
+        content=run_analysis(symbol.upper())
+    )
 
-    return JSONResponse(run_analysis(symbol))
-    @app.get("/scan")
+
+# ==========================================================
+# Manual Scan
+# ==========================================================
+
+@app.get("/scan")
 def scan():
 
     try:
@@ -245,46 +374,82 @@ def scan():
         market_scan()
 
         return {
+
             "status": "SUCCESS",
+
             "message": "Market Scan Completed"
+
         }
 
     except Exception as e:
 
         return {
+
             "status": "ERROR",
+
             "message": str(e)
+
         }
-       @app.get("/eth")
-def eth():
 
-    return run_analysis("ETHUSD")
-@app.get("/btc")
-def btc():
 
-    return run_analysis("BTCUSD")
+# ==========================================================
+# API Information
+# ==========================================================
+
 @app.get("/api")
 def api():
 
     return {
-        "project": "NAKSHATRA AI V4",
-        "available_endpoints": [
+
+        "project": "NAKSHATRA AI v4.0",
+
+        "status": "RUNNING",
+
+        "supported_symbols": [
+
+            "BTCUSD",
+
+            "ETHUSD"
+
+        ],
+
+        "endpoints": [
+
             "/",
-            "/health",
+
             "/dashboard",
+
+            "/health",
+
             "/stats",
+
             "/trades",
+
             "/open-trades",
+
             "/api/history",
+
             "/api/scanner",
-            "/signal",
-            "/signal/BTCUSD",
-            "/signal/ETHUSD",
-            "/analysis",
-            "/analysis/BTCUSD",
-            "/analysis/ETHUSD",
+
             "/btc",
+
             "/eth",
+
+            "/signal",
+
+            "/signal/BTCUSD",
+
+            "/signal/ETHUSD",
+
+            "/analysis",
+
+            "/analysis/BTCUSD",
+
+            "/analysis/ETHUSD",
+
             "/scan"
+
         ]
-        }
+
+}
+    
