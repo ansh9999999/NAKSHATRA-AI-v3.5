@@ -59,6 +59,8 @@ def _fetch_history(symbol, resolution="5m", limit=200):
 
             candles = payload.get("result", [])
 
+            print("FULL RESPONSE =", payload)
+            print("RESULT TYPE =", type(payload.get("result")))
             logger.info(
                 f"Candles : {len(candles)}"
             )
