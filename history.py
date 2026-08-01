@@ -1,9 +1,10 @@
 """
 NAKSHATRA AI
-Historical Candle Data
-Phase 3 - Debug Version
+History Engine v6.0
+Delta Exchange Live History
 """
 
+import time
 import requests
 import pandas as pd
 
@@ -12,12 +13,12 @@ from logger import logger
 
 
 # ==========================================================
-# Fetch History
+# Delta History
 # ==========================================================
 
 def _fetch_history(symbol, resolution="5m", limit=200):
 
-    url = f"{DELTA_BASE_URL}/v2/history/candles"
+    endpoint = f"{DELTA_BASE_URL}/v2/history/candles"
 
     params = {
         "symbol": symbol,
@@ -25,49 +26,53 @@ def _fetch_history(symbol, resolution="5m", limit=200):
         "limit": limit
     }
 
-    logger.info("=" * 60)
-    logger.info(f"SYMBOL     : {symbol}")
-    logger.info(f"RESOLUTION : {resolution}")
-    logger.info(f"LIMIT      : {limit}")
-    logger.info(f"URL        : {url}")
+    logger.info("=" * 70)
+    logger.info(f"Fetching History")
+    logger.info(f"Symbol      : {symbol}")
+    logger.info(f"Resolution  : {resolution}")
+    logger.info(f"Limit       : {limit}")
 
-    for attempt in range(3):
+    for attempt in range(1, 4):
 
         try:
 
+            logger.info(f"Attempt {attempt}")
+
             response = requests.get(
-                url,
+                endpoint,
                 params=params,
                 timeout=20
             )
 
             logger.info(
-                f"HTTP STATUS : {response.status_code}"
-            )
-
-            logger.info(
-                f"RAW RESPONSE : {response.text[:500]}"
+                f"HTTP Status : {response.status_code}"
             )
 
             response.raise_for_status()
 
-            json_data = response.json()
-
-            data = json_data.get("result", [])
+            payload = response.json()
 
             logger.info(
-                f"CANDLES RECEIVED : {len(data)}"
+                f"Success : {payload.get('success')}"
             )
 
-            if len(data) == 0:
+            candles = payload.get("result", [])
 
-                logger.error(
-                    f"NO DATA -> {symbol} {resolution}"
+            logger.info(
+                f"Candles : {len(candles)}"
+            )
+
+            if len(candles) == 0:
+
+                logger.warning(
+                    f"No candle data for {symbol}"
                 )
+
+                time.sleep(1)
 
                 continue
 
-            df = pd.DataFrame(data)
+            df = pd.DataFrame(candles)
 
             if "time" in df.columns:
 
@@ -78,14 +83,14 @@ def _fetch_history(symbol, resolution="5m", limit=200):
                     inplace=True
                 )
 
-            numeric_columns = [
+            numeric = [
                 "open",
                 "high",
                 "low",
                 "close",
                 "volume"
             ]
-            for col in numeric_columns:
+                         for col in numeric:
 
                 if col in df.columns:
 
@@ -98,50 +103,67 @@ def _fetch_history(symbol, resolution="5m", limit=200):
 
             if "timestamp" in df.columns:
 
-                df.sort_values(
+                df["timestamp"] = pd.to_datetime(
+                    df["timestamp"],
+                    unit="s",
+                    utc=True,
+                    errors="coerce"
+                )
+
+                df.dropna(
+                    subset=["timestamp"],
+                    inplace=True
+                )
+
+                df.set_index(
                     "timestamp",
                     inplace=True
                 )
 
-            df.reset_index(
-                drop=True,
-                inplace=True
-            )
+            df.sort_index(inplace=True)
 
             logger.info(
-                f"SUCCESS -> {symbol} {resolution} Rows={len(df)}"
+                f"Loaded {len(df)} candles"
             )
 
             return df
 
+        except requests.HTTPError as e:
+
+            logger.exception(
+                f"HTTP Error : {e}"
+            )
+
         except requests.RequestException as e:
 
             logger.exception(
-                f"REQUEST ERROR : {symbol} {resolution}"
+                f"Network Error : {e}"
             )
-
-            logger.exception(e)
 
         except Exception as e:
 
             logger.exception(
-                f"UNKNOWN ERROR : {symbol} {resolution}"
+                f"Unknown Error : {e}"
             )
 
-            logger.exception(e)
+        time.sleep(1)
 
     logger.error(
-        f"FAILED AFTER 3 ATTEMPTS : {symbol} {resolution}"
+        f"Failed to fetch history for {symbol}"
     )
 
     return pd.DataFrame()
 
 
 # ==========================================================
-# Existing Function
+# Compatibility
 # ==========================================================
 
-def get_history(symbol, resolution="5m", limit=200):
+def get_history(
+    symbol,
+    resolution="5m",
+    limit=200
+):
 
     return _fetch_history(
         symbol,
@@ -154,20 +176,37 @@ def get_history(symbol, resolution="5m", limit=200):
 # Multi Timeframe
 # ==========================================================
 
-def get_multi_timeframe_history(symbol, limit=200):
+def get_multi_timeframe_history(
+    symbol,
+    limit=200
+):
 
     return {
 
-        "5m": _fetch_history(symbol, "5m", limit),
+        "symbol": symbol,
 
-        "15m": _fetch_history(symbol, "15m", limit),
+        "5m": _fetch_history(
+            symbol,
+            "5m",
+            limit
+        ),
 
-        "1h": _fetch_history(symbol, "1h", limit),
+        "15m": _fetch_history(
+            symbol,
+            "15m",
+            limit
+        ),
 
-        "1d": _fetch_history(symbol, "1d", limit),
+        "1h": _fetch_history(
+            symbol,
+            "1h",
+            limit
+        ),
 
-        "1w": _fetch_history(symbol, "1w", limit),
+        "1d": _fetch_history(
+            symbol,
+            "1d",
+            limit
+        )
 
-        "1mo": _fetch_history(symbol, "1mo", limit),
-
-                }
+            }
