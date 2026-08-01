@@ -85,7 +85,7 @@ def _fetch_history(symbol, resolution="5m", limit=200):
                 "close",
                 "volume"
             ]
-                        for col in numeric_columns:
+            for col in numeric_columns:
 
                 if col in df.columns:
 
