@@ -1,14 +1,19 @@
 """
 NAKSHATRA AI
 Historical Candle Data
-Phase 2 - Multi Timeframe Engine
+Phase 3 - Debug Version
 """
 
 import requests
 import pandas as pd
 
 from config import DELTA_BASE_URL
+from logger import logger
 
+
+# ==========================================================
+# Fetch History
+# ==========================================================
 
 def _fetch_history(symbol, resolution="5m", limit=200):
 
@@ -20,6 +25,12 @@ def _fetch_history(symbol, resolution="5m", limit=200):
         "limit": limit
     }
 
+    logger.info("=" * 60)
+    logger.info(f"SYMBOL     : {symbol}")
+    logger.info(f"RESOLUTION : {resolution}")
+    logger.info(f"LIMIT      : {limit}")
+    logger.info(f"URL        : {url}")
+
     for attempt in range(3):
 
         try:
@@ -27,21 +38,43 @@ def _fetch_history(symbol, resolution="5m", limit=200):
             response = requests.get(
                 url,
                 params=params,
-                timeout=15
+                timeout=20
+            )
+
+            logger.info(
+                f"HTTP STATUS : {response.status_code}"
+            )
+
+            logger.info(
+                f"RAW RESPONSE : {response.text[:500]}"
             )
 
             response.raise_for_status()
 
-            data = response.json().get("result", [])
+            json_data = response.json()
 
-            if not data:
-                return pd.DataFrame()
+            data = json_data.get("result", [])
+
+            logger.info(
+                f"CANDLES RECEIVED : {len(data)}"
+            )
+
+            if len(data) == 0:
+
+                logger.error(
+                    f"NO DATA -> {symbol} {resolution}"
+                )
+
+                continue
 
             df = pd.DataFrame(data)
 
             if "time" in df.columns:
+
                 df.rename(
-                    columns={"time": "timestamp"},
+                    columns={
+                        "time": "timestamp"
+                    },
                     inplace=True
                 )
 
@@ -52,8 +85,7 @@ def _fetch_history(symbol, resolution="5m", limit=200):
                 "close",
                 "volume"
             ]
-
-            for col in numeric_columns:
+                        for col in numeric_columns:
 
                 if col in df.columns:
 
@@ -76,34 +108,51 @@ def _fetch_history(symbol, resolution="5m", limit=200):
                 inplace=True
             )
 
+            logger.info(
+                f"SUCCESS -> {symbol} {resolution} Rows={len(df)}"
+            )
+
             return df
 
-        except requests.RequestException:
+        except requests.RequestException as e:
 
-            if attempt == 2:
-                return pd.DataFrame()
+            logger.exception(
+                f"REQUEST ERROR : {symbol} {resolution}"
+            )
 
-        except Exception:
-            return pd.DataFrame()
+            logger.exception(e)
+
+        except Exception as e:
+
+            logger.exception(
+                f"UNKNOWN ERROR : {symbol} {resolution}"
+            )
+
+            logger.exception(e)
+
+    logger.error(
+        f"FAILED AFTER 3 ATTEMPTS : {symbol} {resolution}"
+    )
 
     return pd.DataFrame()
 
 
-# --------------------------
+# ==========================================================
 # Existing Function
-# --------------------------
+# ==========================================================
 
 def get_history(symbol, resolution="5m", limit=200):
-    """
-    Backward compatible
-    Existing scanner continues to work
-    """
-    return _fetch_history(symbol, resolution, limit)
+
+    return _fetch_history(
+        symbol,
+        resolution,
+        limit
+    )
 
 
-# --------------------------
-# Phase 2 Multi Timeframe
-# --------------------------
+# ==========================================================
+# Multi Timeframe
+# ==========================================================
 
 def get_multi_timeframe_history(symbol, limit=200):
 
@@ -121,4 +170,4 @@ def get_multi_timeframe_history(symbol, limit=200):
 
         "1mo": _fetch_history(symbol, "1mo", limit),
 
-    }
+                }
