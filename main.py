@@ -116,7 +116,7 @@ def health():
         "status": "healthy"
 
     }
-    # ==========================================================
+# ==========================================================
 # Trades
 # ==========================================================
 
@@ -275,30 +275,25 @@ def api_scanner():
 
 def run_analysis(symbol: str):
 
+def run_analysis(symbol: str):
+
     try:
 
         data = get_multi_timeframe_history(symbol)
 
         if not data:
-
             return {
-
                 "status": "NO DATA"
-
             }
 
         return generate_signal(data)
 
     except Exception as e:
-
         return {
-
             "status": "ERROR",
-
             "message": str(e)
-
         }
-        # ==========================================================
+# ==========================================================
 # BTC Signal
 # ==========================================================
 
