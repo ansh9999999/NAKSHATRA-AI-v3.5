@@ -18,7 +18,7 @@ from logger import logger
 
 def _fetch_history(symbol, resolution="5m", limit=200):
 
-    print("===== HISTORY.PY CALLED =====")
+  raise Exception("HISTORY FILE LOADED")
     endpoint = f"{DELTA_BASE_URL}/v2/history/candles"
 
     params = {
