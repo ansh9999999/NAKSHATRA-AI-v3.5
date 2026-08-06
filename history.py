@@ -18,7 +18,8 @@ from logger import logger
 
 def _fetch_history(symbol, resolution="5m", limit=200):
 
-  print("===== HISTORY.PY CALLED =====")
+    print("===== HISTORY.PY CALLED =====")
+
     endpoint = f"{DELTA_BASE_URL}/v2/history/candles"
 
     params = {
@@ -28,7 +29,7 @@ def _fetch_history(symbol, resolution="5m", limit=200):
     }
 
     logger.info("=" * 70)
-    logger.info(f"Fetching History")
+    logger.info("Fetching History")
     logger.info(f"Symbol      : {symbol}")
     logger.info(f"Resolution  : {resolution}")
     logger.info(f"Limit       : {limit}")
@@ -53,17 +54,16 @@ def _fetch_history(symbol, resolution="5m", limit=200):
 
             payload = response.json()
 
-          print("STATUS =", response.status_code)
-          print("FULL RESPONSE =", payload)
-          print("RESULT =", payload.get("result"))
+            print("STATUS =", response.status_code)
+            print("FULL RESPONSE =", payload)
+            print("RESULT =", payload.get("result"))
+
             logger.info(
                 f"Success : {payload.get('success')}"
             )
 
             candles = payload.get("result", [])
 
-            print("FULL RESPONSE =", payload)
-            print("RESULT TYPE =", type(payload.get("result")))
             logger.info(
                 f"Candles : {len(candles)}"
             )
@@ -79,8 +79,7 @@ def _fetch_history(symbol, resolution="5m", limit=200):
                 continue
 
             df = pd.DataFrame(candles)
-
-            if "time" in df.columns:
+                        if "time" in df.columns:
 
                 df.rename(
                     columns={
@@ -96,6 +95,7 @@ def _fetch_history(symbol, resolution="5m", limit=200):
                 "close",
                 "volume"
             ]
+
             for col in numeric:
 
                 if col in df.columns:
@@ -159,9 +159,7 @@ def _fetch_history(symbol, resolution="5m", limit=200):
     )
 
     return pd.DataFrame()
-
-
-# ==========================================================
+    # ==========================================================
 # Compatibility
 # ==========================================================
 
@@ -215,4 +213,4 @@ def get_multi_timeframe_history(
             limit
         )
 
-            }
+}
