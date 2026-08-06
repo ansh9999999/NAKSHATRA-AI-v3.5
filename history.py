@@ -46,6 +46,8 @@ def _fetch_history(symbol, resolution="5m", limit=200):
                 timeout=20
             )
 
+            print("RAW RESPONSE =", response.text)
+            
             logger.info(
                 f"HTTP Status : {response.status_code}"
             )
