@@ -79,7 +79,8 @@ def _fetch_history(symbol, resolution="5m", limit=200):
                 continue
 
             df = pd.DataFrame(candles)
-                        if "time" in df.columns:
+            
+            if "time" in df.columns:
 
                 df.rename(
                     columns={
