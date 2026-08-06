@@ -18,7 +18,7 @@ from logger import logger
 
 def _fetch_history(symbol, resolution="5m", limit=200):
 
-  raise Exception("HISTORY FILE LOADED")
+  print("===== HISTORY.PY CALLED =====")
     endpoint = f"{DELTA_BASE_URL}/v2/history/candles"
 
     params = {
@@ -53,6 +53,9 @@ def _fetch_history(symbol, resolution="5m", limit=200):
 
             payload = response.json()
 
+          print("STATUS =", response.status_code)
+          print("FULL RESPONSE =", payload)
+          print("RESULT =", payload.get("result"))
             logger.info(
                 f"Success : {payload.get('success')}"
             )
