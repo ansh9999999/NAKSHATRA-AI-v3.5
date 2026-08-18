@@ -277,9 +277,9 @@ def run_analysis(symbol: str):
  try:
     logger.info(f"ANALYSIS START: {symbol}")
 
-        data = get_multi_timeframe_history(symbol)
+    data = get_multi_timeframe_history(symbol)
 
-        logger.info(
+    logger.info(
             f"ANALYSIS HISTORY RETURNED: {symbol} | "
             f"keys={list(data.keys()) if isinstance(data, dict) else type(data)}"
         )
