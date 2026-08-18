@@ -275,7 +275,7 @@ def api_scanner():
 
 def run_analysis(symbol: str):
 
-        try:
+            try:
         logger.info(f"ANALYSIS START: {symbol}")
 
         data = get_multi_timeframe_history(symbol)
@@ -296,8 +296,7 @@ def run_analysis(symbol: str):
         return {
             "status": "ERROR",
             "message": str(e)
-    }
-        
+        }
 # ==========================================================
 # BTC Signal
 # ==========================================================
