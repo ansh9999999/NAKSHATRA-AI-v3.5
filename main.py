@@ -277,9 +277,16 @@ def run_analysis(symbol: str):
 
     try:
 
-        data = get_multi_timeframe_history(symbol)
+                logger.info(f"ANALYSIS START: {symbol}")
 
-        if not data:
+                data = get_multi_timeframe_history(symbol)
+
+               logger.info(
+            f"ANALYSIS HISTORY RETURNED: {symbol} | "
+            f"keys={list(data.keys()) if isinstance(data, dict) else type(data)}"
+)
+
+               if not data:
             return {
                 "status": "NO DATA"
             }
