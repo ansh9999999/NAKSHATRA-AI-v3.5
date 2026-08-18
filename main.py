@@ -275,18 +275,17 @@ def api_scanner():
 
 def run_analysis(symbol: str):
 
-    try:
+        try:
+        logger.info(f"ANALYSIS START: {symbol}")
 
-                logger.info(f"ANALYSIS START: {symbol}")
+        data = get_multi_timeframe_history(symbol)
 
-                data = get_multi_timeframe_history(symbol)
-
-               logger.info(
+        logger.info(
             f"ANALYSIS HISTORY RETURNED: {symbol} | "
             f"keys={list(data.keys()) if isinstance(data, dict) else type(data)}"
-)
+        )
 
-               if not data:
+        if not data:
             return {
                 "status": "NO DATA"
             }
@@ -297,7 +296,7 @@ def run_analysis(symbol: str):
         return {
             "status": "ERROR",
             "message": str(e)
-        }
+    }
         
 # ==========================================================
 # BTC Signal
