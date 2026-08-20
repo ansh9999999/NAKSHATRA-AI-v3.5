@@ -30,7 +30,14 @@ def generate_signal(data):
     # Technical Engines
     # ---------------------------------
 
-    trend_result = analyze_multi_timeframe(data)
+    trend_data = {
+        "5m": data["5m"],
+        "15m": data["15m"],
+        "1h": data["1h"],
+        "1d": data["1d"]
+    }
+
+    trend_result = analyze_multi_timeframe(trend_data)
 
     momentum_result = analyze_momentum(entry_df)
 
