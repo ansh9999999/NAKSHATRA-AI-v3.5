@@ -1,7 +1,7 @@
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -243,30 +243,37 @@ def api_history():
 
 @app.get("/api/scanner")
 def api_scanner():
+    results = []
 
-    return [
+    for symbol in ("BTCUSD", "ETHUSD"):
+        result = run_analysis(symbol)
 
-        {
+        if result.get("status") == "ERROR":
+            results.append({
+                "symbol": symbol,
+                "signal": "ERROR",
+                "strength": "-",
+                "message": result.get("message", "Unknown error")
+            })
+            continue
 
-            "symbol": "BTCUSD",
+        technical = result.get("technical", {})
+        results.append({
+            "symbol": symbol,
+            "signal": (
+                technical.get("signal")
+                or result.get("signal")
+                or result.get("recommendation")
+                or "WAIT"
+            ),
+            "strength": (
+                technical.get("confidence")
+                or result.get("overall_confidence")
+                or 0
+            )
+        })
 
-            "signal": "Waiting",
-
-            "strength": "-"
-
-        },
-
-        {
-
-            "symbol": "ETHUSD",
-
-            "signal": "Waiting",
-
-            "strength": "-"
-
-        }
-
-    ]
+    return results
 
 
 # ==========================================================
@@ -339,10 +346,10 @@ def signal_symbol(symbol: str):
 
 @app.get("/analysis")
 def analysis():
-
-    return JSONResponse(
-        content=run_analysis("BTCUSD")
-    )
+    # Return a normal dict so FastAPI performs its own JSON encoding.
+    # This avoids JSONResponse/stdlib json.dumps failures when the
+    # analysis engine contains pandas/numpy scalar values.
+    return run_analysis("BTCUSD")
 
 
 # ==========================================================
@@ -351,10 +358,7 @@ def analysis():
 
 @app.get("/analysis/{symbol}")
 def analysis_symbol(symbol: str):
-
-    return JSONResponse(
-        content=run_analysis(symbol.upper())
-    )
+    return run_analysis(symbol.upper())
 
 
 # ==========================================================
