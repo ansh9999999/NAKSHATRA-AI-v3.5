@@ -1,4 +1,19 @@
+"""
+NAKSHATRA AI v4.0 - Fast dashboard API
+
+Drop-in replacement for main.py.
+
+The trading/analysis engine is not changed. This file:
+- avoids JSONResponse around analysis objects,
+- adds a lightweight analysis cache,
+- prevents duplicate dashboard/scanner analysis calls,
+- exposes /api/live and /api/debug-data for the dashboard,
+- returns explicit errors instead of leaving the UI stuck on Loading.
+"""
+
 from contextlib import asynccontextmanager
+import time
+import math
 
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
@@ -7,257 +22,266 @@ from fastapi.templating import Jinja2Templates
 
 from scheduler import start_scheduler
 from logger import logger
-
 from database.database import initialize_database
-from database.models import (
-    get_all_trades,
-    get_open_trades,
-)
-
+from database.models import get_all_trades, get_open_trades
 from history import get_multi_timeframe_history
 from analysis.signal import generate_signal
 from scanner import market_scan
+from delta import get_ticker
+
+CACHE_TTL = 8
+_analysis_cache = {}
+
+
+def _json_safe(value):
+    """Convert common pandas/numpy scalar values without changing the engine."""
+    if value is None or isinstance(value, (str, bool, int, float)):
+        if isinstance(value, float) and not math.isfinite(value):
+            return None
+        return value
+
+    if hasattr(value, "item"):
+        try:
+            return _json_safe(value.item())
+        except Exception:
+            pass
+
+    if isinstance(value, dict):
+        return {str(k): _json_safe(v) for k, v in value.items()}
+
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(v) for v in value]
+
+    if hasattr(value, "isoformat"):
+        try:
+            return value.isoformat()
+        except Exception:
+            pass
+
+    return str(value)
+
+
+def run_analysis(symbol: str, force=False):
+    symbol = symbol.upper()
+    now = time.time()
+
+    if not force:
+        cached = _analysis_cache.get(symbol)
+        if cached and now - cached["time"] < CACHE_TTL:
+            return cached["result"]
+
+    started = time.time()
+
+    try:
+        data = get_multi_timeframe_history(symbol, limit=200)
+
+        entry = data.get("5m")
+        if entry is None or entry.empty:
+            result = {
+                "status": "NO DATA",
+                "symbol": symbol,
+                "message": "Delta 5m candle data unavailable",
+                "server_time": time.time(),
+            }
+            _analysis_cache[symbol] = {"time": time.time(), "result": result}
+            return result
+
+        # Preserve the existing signal engine exactly.
+        data["symbol"] = symbol
+        result = generate_signal(data)
+        result = _json_safe(result)
+
+        if isinstance(result, dict):
+            result["status"] = "OK"
+            result["server_ms"] = round((time.time() - started) * 1000)
+
+        _analysis_cache[symbol] = {"time": time.time(), "result": result}
+        return result
+
+    except Exception as exc:
+        logger.exception("ANALYSIS ERROR %s", symbol)
+        result = {
+            "status": "ERROR",
+            "symbol": symbol,
+            "message": str(exc),
+            "server_ms": round((time.time() - started) * 1000),
+        }
+        _analysis_cache[symbol] = {"time": time.time(), "result": result}
+        return result
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-
     logger.info("Starting NAKSHATRA AI v4.0")
-
     initialize_database()
-
     start_scheduler()
-
     yield
-
     logger.info("Stopping NAKSHATRA AI v4.0")
 
 
 app = FastAPI(
     title="NAKSHATRA AI v4.0",
     version="4.0",
-    lifespan=lifespan
+    lifespan=lifespan,
 )
 
-templates = Jinja2Templates(
-    directory="templates"
-)
-
-app.mount(
-    "/static",
-    StaticFiles(directory="static"),
-    name="static"
-)
+templates = Jinja2Templates(directory="templates")
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
 
-# ==========================================================
-# Dashboard
-# ==========================================================
-
-@app.get("/dashboard", response_class=HTMLResponse)
-async def dashboard(request: Request):
-
+@app.get("/", response_class=HTMLResponse)
+async def home_page(request: Request):
     return templates.TemplateResponse(
         request=request,
         name="dashboard.html",
-        context={"request": request}
+        context={"request": request},
     )
 
 
-# ==========================================================
-# Home
-# ==========================================================
+@app.get("/dashboard", response_class=HTMLResponse)
+async def dashboard(request: Request):
+    return templates.TemplateResponse(
+        request=request,
+        name="dashboard.html",
+        context={"request": request},
+    )
 
-@app.get("/")
-def home():
-
-    return {
-
-        "project": "NAKSHATRA AI",
-
-        "version": "4.0",
-
-        "status": "Running",
-
-        "apis": [
-
-            "/health",
-
-            "/dashboard",
-
-            "/signal",
-
-            "/analysis",
-
-            "/scan",
-
-            "/stats",
-
-            "/trades",
-
-            "/open-trades",
-
-            "/api"
-
-        ]
-
-    }
-
-
-# ==========================================================
-# Health
-# ==========================================================
 
 @app.get("/health")
 def health():
+    return {"status": "healthy"}
 
+
+@app.get("/api")
+def api():
     return {
-
-        "status": "healthy"
-
-    }
-# ==========================================================
-# Trades
-# ==========================================================
-
-@app.get("/trades")
-def trades():
-
-    data = get_all_trades()
-
-    return {
-        "count": len(data),
-        "trades": data
+        "project": "NAKSHATRA AI",
+        "version": "4.0",
+        "status": "RUNNING",
+        "supported_symbols": ["BTCUSD", "ETHUSD"],
+        "dashboard_api": "/api/live?symbol=BTCUSD",
     }
 
 
-# ==========================================================
-# Open Trades
-# ==========================================================
+@app.get("/api/live")
+def api_live(symbol: str = "BTCUSD", force: bool = False):
+    symbol = symbol.upper()
+    analysis = run_analysis(symbol, force=force)
 
-@app.get("/open-trades")
-def open_trades():
+    ticker = None
+    try:
+        ticker = get_ticker(symbol)
+    except Exception as exc:
+        logger.warning("Ticker failed %s: %s", symbol, exc)
 
-    data = get_open_trades()
+    return _json_safe({
+        "status": analysis.get("status", "UNKNOWN")
+            if isinstance(analysis, dict) else "UNKNOWN",
+        "symbol": symbol,
+        "ticker": ticker,
+        "analysis": analysis,
+        "server_time": time.time(),
+    })
+
+
+@app.get("/api/debug-data")
+def debug_data(symbol: str = "BTCUSD"):
+    symbol = symbol.upper()
+    data = get_multi_timeframe_history(symbol, limit=20)
 
     return {
-        "count": len(data),
-        "trades": data
+        "symbol": symbol,
+        "timeframes": {
+            tf: {
+                "rows": int(len(df)),
+                "empty": bool(df.empty),
+                "last_close": (
+                    float(df["close"].iloc[-1])
+                    if not df.empty and "close" in df.columns
+                    else None
+                ),
+            }
+            for tf, df in data.items()
+        },
     }
 
-
-# ==========================================================
-# Statistics
-# ==========================================================
 
 @app.get("/stats")
 def stats():
-
     trades = get_all_trades()
-
     total = len(trades)
-
-    wins = 0
-    losses = 0
-    open_positions = 0
-
+    wins = losses = open_positions = 0
     total_pnl = 0
 
     for trade in trades:
+        try:
+            pnl = float(trade[8] or 0)
+        except Exception:
+            pnl = 0
 
-        pnl = trade[8]
         result = trade[13]
 
         total_pnl += pnl
 
         if result == "WIN":
             wins += 1
-
         elif result == "LOSS":
             losses += 1
-
         elif result == "OPEN":
             open_positions += 1
 
-    win_rate = 0
-
-    if wins + losses > 0:
-
-        win_rate = round(
-            wins / (wins + losses) * 100,
-            2
-        )
+    win_rate = round(wins / (wins + losses) * 100, 2) if wins + losses else 0
 
     return {
-
         "total_trades": total,
-
         "wins": wins,
-
         "losses": losses,
-
         "open_trades": open_positions,
-
         "win_rate": win_rate,
-
-        "net_pnl": total_pnl
-
+        "net_pnl": total_pnl,
     }
 
 
-# ==========================================================
-# Trade History
-# ==========================================================
+@app.get("/trades")
+def trades():
+    data = get_all_trades()
+    return {"count": len(data), "trades": data}
+
+
+@app.get("/open-trades")
+def open_trades():
+    data = get_open_trades()
+    return {"count": len(data), "trades": data}
+
 
 @app.get("/api/history")
 def api_history():
-
     trades = get_all_trades()
-
     history = []
 
     for t in trades[-100:]:
-
         history.append({
-
             "symbol": t[1],
-
             "side": t[2],
-
             "entry": t[5],
-
             "exit": t[6],
-
             "pnl": t[8],
-
-            "status": t[13]
-
+            "status": t[13],
         })
 
-    return history
+    return _json_safe(history)
 
-
-# ==========================================================
-# Scanner
-# ==========================================================
 
 @app.get("/api/scanner")
 def api_scanner():
+    # Reuse the same cached analysis endpoint instead of running six
+    # fresh Delta requests for each scanner refresh.
     results = []
 
     for symbol in ("BTCUSD", "ETHUSD"):
         result = run_analysis(symbol)
+        technical = result.get("technical", {}) if isinstance(result, dict) else {}
 
-        if result.get("status") == "ERROR":
-            results.append({
-                "symbol": symbol,
-                "signal": "ERROR",
-                "strength": "-",
-                "message": result.get("message", "Unknown error")
-            })
-            continue
-
-        technical = result.get("technical", {})
         results.append({
             "symbol": symbol,
             "signal": (
@@ -270,185 +294,49 @@ def api_scanner():
                 technical.get("confidence")
                 or result.get("overall_confidence")
                 or 0
-            )
+            ),
+            "status": result.get("status", "UNKNOWN"),
+            "message": result.get("message", ""),
         })
 
     return results
 
 
-# ==========================================================
-# Analysis Helper
-# ==========================================================
-
-def run_analysis(symbol: str):
-    try:
-        logger.info(f"ANALYSIS START: {symbol}")
-
-        data = get_multi_timeframe_history(symbol)
-
-        logger.info(f"ANALYSIS HISTORY RETURNED: {symbol}")
-
-        if not data:
-            return {
-                "status": "NO DATA"
-            }
-
-        return generate_signal(data)
-
-    except Exception as e:
-        return {
-            "status": "ERROR",
-            "message": str(e)
-        }
-# ==========================================================
-# BTC Signal
-# ==========================================================
-
 @app.get("/btc")
 def btc():
-
     return run_analysis("BTCUSD")
 
-
-# ==========================================================
-# ETH Signal
-# ==========================================================
 
 @app.get("/eth")
 def eth():
-
     return run_analysis("ETHUSD")
 
 
-# ==========================================================
-# Default Signal
-# ==========================================================
-
 @app.get("/signal")
 def signal():
-
     return run_analysis("BTCUSD")
 
-
-# ==========================================================
-# Symbol Signal
-# ==========================================================
 
 @app.get("/signal/{symbol}")
 def signal_symbol(symbol: str):
+    return run_analysis(symbol)
 
-    return run_analysis(symbol.upper())
-
-
-# ==========================================================
-# Analysis
-# ==========================================================
 
 @app.get("/analysis")
 def analysis():
-    # Return a normal dict so FastAPI performs its own JSON encoding.
-    # This avoids JSONResponse/stdlib json.dumps failures when the
-    # analysis engine contains pandas/numpy scalar values.
     return run_analysis("BTCUSD")
 
 
-# ==========================================================
-# Analysis By Symbol
-# ==========================================================
-
 @app.get("/analysis/{symbol}")
 def analysis_symbol(symbol: str):
-    return run_analysis(symbol.upper())
+    return run_analysis(symbol)
 
-
-# ==========================================================
-# Manual Scan
-# ==========================================================
 
 @app.get("/scan")
 def scan():
-
     try:
-
         market_scan()
-
-        return {
-
-            "status": "SUCCESS",
-
-            "message": "Market Scan Completed"
-
-        }
-
-    except Exception as e:
-
-        return {
-
-            "status": "ERROR",
-
-            "message": str(e)
-
-        }
-
-
-# ==========================================================
-# API Information
-# ==========================================================
-
-@app.get("/api")
-def api():
-
-    return {
-
-        "project": "NAKSHATRA AI v4.0",
-
-        "status": "RUNNING",
-
-        "supported_symbols": [
-
-            "BTCUSD",
-
-            "ETHUSD"
-
-        ],
-
-        "endpoints": [
-
-            "/",
-
-            "/dashboard",
-
-            "/health",
-
-            "/stats",
-
-            "/trades",
-
-            "/open-trades",
-
-            "/api/history",
-
-            "/api/scanner",
-
-            "/btc",
-
-            "/eth",
-
-            "/signal",
-
-            "/signal/BTCUSD",
-
-            "/signal/ETHUSD",
-
-            "/analysis",
-
-            "/analysis/BTCUSD",
-
-            "/analysis/ETHUSD",
-
-            "/scan"
-
-        ]
-
-}
-    
+        return {"status": "SUCCESS", "message": "Market Scan Completed"}
+    except Exception as exc:
+        logger.exception("Manual scan failed")
+        return {"status": "ERROR", "message": str(exc)}
