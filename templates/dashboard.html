@@ -3,149 +3,94 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>NAKSHATRA AI v4.0 - Live Dashboard</title>
-<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-<style>
-*{box-sizing:border-box}
-body{margin:0;background:#081225;color:#e8eefc;font-family:Arial,sans-serif}
-.container{max-width:900px;margin:auto;padding:14px}
-header{padding:8px 4px 14px}
-h1{font-size:25px;margin:5px 0 12px;color:#35bfff}
-h2{font-size:19px;margin:0 0 12px;color:#35bfff}
-h3{margin:0 0 7px;font-size:14px;color:#aebbd0}
-.status{display:flex;gap:8px;flex-wrap:wrap}
-.status span{background:#16233b;border-radius:8px;padding:8px 10px;font-size:12px}
-.toolbar{display:flex;gap:8px;margin:10px 0}
-button{border:0;border-radius:8px;padding:10px 15px;background:#1c2d49;color:#fff;font-weight:bold}
-button.active{background:#1599e8}
-.section{background:#111e35;border-radius:14px;padding:14px;margin:12px 0;box-shadow:0 5px 20px rgba(0,0,0,.18)}
-.price{font-size:30px;font-weight:bold;color:#fff}
-.sub{font-size:12px;color:#8fa0b9;margin-top:4px}
-.decision{text-align:center;padding:18px}
-.decision .big{font-size:25px;font-weight:800;margin:5px 0 8px}
-.decision .conf{font-size:15px;color:#b9c6d9}
-.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:9px}
-.module{background:#17243a;border-radius:11px;padding:12px}
-.value{font-size:20px;font-weight:bold}
-.green{color:#39e58c}.red{color:#ff5d6c}.yellow{color:#ffd166}.blue{color:#35bfff}
-.tf-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
-.tf{background:#17243a;border-radius:10px;padding:10px}
-.tf .name{font-size:12px;color:#91a2ba}
-.tf .trend{font-size:14px;font-weight:bold;margin-top:6px}
-.tf .score{font-size:12px;color:#aab8cc;margin-top:4px}
-.bar{height:7px;background:#0b1528;border-radius:10px;overflow:hidden;margin-top:8px}
-.bar i{display:block;height:100%;background:#35bfff}
-.row{display:flex;justify-content:space-between;gap:10px;padding:9px 0;border-bottom:1px solid #24324a;font-size:13px}
-.row:last-child{border-bottom:0}
-.small{font-size:12px;color:#9aabc1}
-.reason{font-size:12px;color:#aebbd0;margin:6px 0}
-table{width:100%;border-collapse:collapse;font-size:11px;min-width:620px}
-th,td{text-align:left;padding:8px;border-bottom:1px solid #25334a}
-.table-wrap{overflow:auto}
-.scanner-card{background:#17243a;border-radius:10px;padding:12px;margin:8px 0}
-footer{text-align:center;color:#6f8098;font-size:12px;padding:15px}
-@media(max-width:600px){
- .container{padding:10px}
- .grid{grid-template-columns:repeat(2,1fr)}
- .tf-grid{grid-template-columns:repeat(2,1fr)}
- .price{font-size:27px}
-}
-</style>
+<title>NAKSHATRA AI v4.0</title>
+<link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
 <div class="container">
 
 <header>
-  <h1>🚀 NAKSHATRA AI v4.0</h1>
-  <div class="status">
-    <span id="brokerStatus">🟢 Broker Online</span>
-    <span id="schedulerStatus">🟢 Scheduler Running</span>
-    <span id="lastUpdate">Updating...</span>
+  <div>
+    <h1>🚀 NAKSHATRA AI v4.0</h1>
+    <div class="status-row">
+      <span class="pill" id="brokerStatus">🟢 Broker Online</span>
+      <span class="pill" id="schedulerStatus">🟢 Scheduler Running</span>
+      <span class="pill" id="updateStatus">Updating...</span>
+    </div>
+  </div>
+  <div class="symbols">
+    <button class="symbol active" data-symbol="BTCUSD">BTCUSD</button>
+    <button class="symbol" data-symbol="ETHUSD">ETHUSD</button>
   </div>
 </header>
 
-<div class="toolbar">
-  <button id="btcBtn" class="active" onclick="setSymbol('BTCUSD')">BTCUSD</button>
-  <button id="ethBtn" onclick="setSymbol('ETHUSD')">ETHUSD</button>
-</div>
-
-<section class="section">
+<section class="card market">
   <h2>💰 Live Market</h2>
-  <div class="price" id="price">Loading...</div>
-  <div class="sub" id="symbolTime">—</div>
+  <div id="livePrice" class="big">Loading...</div>
+  <div id="liveMeta" class="muted">—</div>
 </section>
 
-<section class="section decision">
+<section class="card decision">
   <h2>🎯 NAKSHATRA Decision</h2>
-  <div class="big" id="decision">Loading...</div>
-  <div class="conf">Overall Confidence: <b id="overallConfidence">—</b></div>
-  <div class="conf" style="margin-top:7px">Action: <b id="action">—</b></div>
+  <div id="decision" class="big">Loading...</div>
+  <div id="confidence" class="muted">Overall Confidence: —</div>
+  <div id="action" class="muted">Action: —</div>
 </section>
 
-<section class="section">
+<section class="card">
   <h2>🧠 Analysis Modules</h2>
-  <div class="grid">
-    <div class="module">
-      <h3>Technical</h3>
-      <div class="value" id="technicalSignal">—</div>
-      <div class="small">Confidence: <span id="technicalScore">—</span></div>
-    </div>
-    <div class="module">
-      <h3>🌙 Astrology</h3>
-      <div class="value" id="astroBias">—</div>
-      <div class="small">Score: <span id="astroScore">—</span></div>
-    </div>
-    <div class="module">
-      <h3>🔢 Numerology</h3>
-      <div class="value" id="numBias">—</div>
-      <div class="small">Score: <span id="numScore">—</span></div>
-    </div>
+  <div class="grid3">
+    <div class="mini"><b>Technical</b><strong id="technical">—</strong><span id="technicalConf">Confidence: —</span></div>
+    <div class="mini"><b>🌙 Astrology</b><strong id="astrology">—</strong><span id="astrologyScore">Score: —</span></div>
+    <div class="mini"><b>🔢 Numerology</b><strong id="numerology">—</strong><span id="numerologyScore">Score: —</span></div>
   </div>
 </section>
 
-<section class="section">
+<section class="card">
   <h2>📊 Multi-Timeframe Trend</h2>
-  <div class="tf-grid" id="timeframes"></div>
+  <div id="mtf" class="mtf">Loading...</div>
 </section>
 
-<section class="section">
+<section class="card">
   <h2>🤝 Agreement</h2>
-  <div class="row"><span>Technical</span><b id="agreementTechnical">—</b></div>
-  <div class="row"><span>Astrology</span><b id="agreementAstro">—</b></div>
-  <div class="row"><span>Numerology</span><b id="agreementNum">—</b></div>
-  <div class="row"><span>Final Agreement</span><b id="agreementFinal">—</b></div>
-</section>
-
-<section class="section">
-  <h2>📈 Technical Details</h2>
-  <div class="grid">
-    <div class="module"><h3>5m EMA9</h3><div class="value" id="ema9">—</div></div>
-    <div class="module"><h3>5m EMA50</h3><div class="value" id="ema50">—</div></div>
-    <div class="module"><h3>5m EMA200</h3><div class="value" id="ema200">—</div></div>
+  <div class="agreement">
+    <div>Technical <span id="agreeTechnical">—</span></div>
+    <div>Astrology <span id="agreeAstrology">—</span></div>
+    <div>Numerology <span id="agreeNumerology">—</span></div>
+    <div>Final Agreement <span id="agreeFinal">—</span></div>
   </div>
 </section>
 
-<section class="section">
-  <h2>📝 Reasons</h2>
-  <div id="reasons"><div class="small">Loading...</div></div>
+<section class="card">
+  <h2>📈 Technical Details</h2>
+  <div class="grid3">
+    <div class="mini"><b>5m EMA9</b><strong id="ema9">—</strong></div>
+    <div class="mini"><b>5m EMA50</b><strong id="ema50">—</strong></div>
+    <div class="mini"><b>5m EMA200</b><strong id="ema200">—</strong></div>
+  </div>
 </section>
 
-<section class="section">
+<section class="card">
+  <h2>📝 Reasons</h2>
+  <ul id="reasons"><li>Loading...</li></ul>
+</section>
+
+<section class="card chart-card">
   <h2>📉 Equity Curve</h2>
   <canvas id="equityChart"></canvas>
 </section>
 
-<section class="section">
+<section class="card">
   <h2>🔎 Live Scanner</h2>
-  <div id="scannerSignals">Loading...</div>
+  <div id="scanner">Loading...</div>
 </section>
 
-<section class="section">
+<section class="card">
   <h2>📋 Recent Trades</h2>
   <div class="table-wrap">
     <table>
       <thead><tr><th>ID</th><th>Symbol</th><th>Side</th><th>Entry</th><th>Exit</th><th>P&L</th><th>Status</th></tr></thead>
-      <tbody id="tradeTable"></tbody>
+      <tbody id="trades"><tr><td colspan="7">Loading...</td></tr></tbody>
     </table>
   </div>
 </section>
