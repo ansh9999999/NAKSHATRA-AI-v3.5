@@ -47,10 +47,34 @@ def _fetch_history(symbol, resolution="5m", limit=200):
     if cached and now - cached[0] < _CACHE_TTL:
         return cached[1].copy()
 
+    # Delta candles API expects a time window in Unix seconds.
+    interval_seconds = {
+        "1m": 60,
+        "3m": 180,
+        "5m": 300,
+        "15m": 900,
+        "30m": 1800,
+        "1h": 3600,
+        "2h": 7200,
+        "4h": 14400,
+        "6h": 21600,
+        "12h": 43200,
+        "1d": 86400,
+        "1w": 604800,
+        "1mo": 2592000,
+    }.get(resolution)
+
+    if interval_seconds is None:
+        raise ValueError(f"Unsupported Delta resolution: {resolution}")
+
+    end = int(time.time())
+    start = end - (int(limit) * interval_seconds)
+
     params = {
         "symbol": symbol.upper(),
         "resolution": resolution,
-        "limit": int(limit),
+        "start": start,
+        "end": end,
     }
     url = _endpoint()
 
@@ -63,6 +87,10 @@ def _fetch_history(symbol, resolution="5m", limit=200):
 
             payload = response.json()
             rows = payload.get("result") or []
+            if not isinstance(rows, list):
+                raise ValueError(
+                    f"Unexpected Delta candle response for {symbol.upper()} {resolution}"
+                )
 
             if not rows:
                 raise ValueError(
