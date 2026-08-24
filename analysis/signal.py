@@ -92,7 +92,12 @@ def generate_signal(data):
 
     timestamp = entry_df.index[-1]
 
-    if hasattr(timestamp, "to_pydatetime"):
+    # Delta candle timestamps are Unix integers. Convert them to a real
+    # Python datetime before astrology/numerology modules use .day, .month, etc.
+    if isinstance(timestamp, (int, float)):
+        import datetime as _dt
+        timestamp = _dt.datetime.fromtimestamp(float(timestamp), tz=_dt.timezone.utc)
+    elif hasattr(timestamp, "to_pydatetime"):
         timestamp = timestamp.to_pydatetime()
 
     symbol = data.get("symbol", "BTCUSD")
