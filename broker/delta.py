@@ -1,67 +1,117 @@
 """
-NAKSHATRA AI v4.0 - Delta Exchange market data helper
-
-This file was missing from the previous deployment package.
-The existing project imports:
-    from delta import get_ticker
-
-So this module restores that import and keeps the configured
-DELTA_BASE_URL compatible with either:
-    https://api.india.delta.exchange
-or:
-    https://api.india.delta.exchange/v2
+NAKSHATRA AI
+Delta Exchange India Broker
 """
 
+import time
+import hmac
+import hashlib
+import json
 import requests
 
-from config import DELTA_BASE_URL
-from logger import logger
+from config import DELTA_API_KEY, DELTA_API_SECRET
+
+BASE_URL = "https://api.india.delta.exchange"
 
 
-def _ticker_url(symbol: str) -> str:
-    base = str(DELTA_BASE_URL).rstrip("/")
+class DeltaBroker:
+    def __init__(self):
+        self.base_url = BASE_URL
+        self.api_key = DELTA_API_KEY
+        self.api_secret = DELTA_API_SECRET
 
-    if base.endswith("/v2"):
-        return f"{base}/tickers/{symbol.upper()}"
+    def _timestamp(self):
+        return str(int(time.time()))
 
-    return f"{base}/v2/tickers/{symbol.upper()}"
+    def _signature(self, method, path, timestamp, body=""):
+        msg = method.upper() + timestamp + path + body
+        return hmac.new(
+            self.api_secret.encode(),
+            msg.encode(),
+            hashlib.sha256
+        ).hexdigest()
 
-
-def get_ticker(symbol="BTCUSD"):
-    symbol = symbol.upper()
-
-    try:
-        url = _ticker_url(symbol)
-        response = requests.get(url, timeout=8)
-        response.raise_for_status()
-
-        payload = response.json()
-        data = payload.get("result")
-
-        if not data:
-            logger.warning("Delta ticker returned no result for %s", symbol)
-            return None
-
-        result = {
-            "symbol": data.get("symbol", symbol),
-            "price": float(data["close"]) if data.get("close") is not None else None,
-            "mark_price": (
-                float(data["mark_price"])
-                if data.get("mark_price") is not None
-                else None
-            ),
-            "volume": (
-                float(data["volume"])
-                if data.get("volume") is not None
-                else None
-            ),
+    def _headers(self, method, path, body=""):
+        ts = self._timestamp()
+        return {
+            "api-key": self.api_key,
+            "timestamp": ts,
+            "signature": self._signature(method, path, ts, body),
+            "Content-Type": "application/json",
         }
 
-        # Preserve any useful raw fields without making the dashboard
-        # dependent on them.
-        result["raw"] = data
-        return result
+    def get_balance(self):
+        path = "/v2/wallet/balances"
+        r = requests.get(
+            self.base_url + path,
+            headers=self._headers("GET", path),
+            timeout=15,
+        )
+        r.raise_for_status()
+        return r.json()
 
-    except Exception as exc:
-        logger.warning("Delta ticker error %s: %s", symbol, exc)
-        return None
+    def get_positions(self):
+        path = "/v2/positions"
+        r = requests.get(
+            self.base_url + path,
+            headers=self._headers("GET", path),
+            timeout=15,
+        )
+        r.raise_for_status()
+        return r.json()
+
+    def place_market_order(self, product_id, side, size):
+        return self.place_order(
+            product_id=product_id,
+            side=side,
+            size=size,
+            order_type="market",
+        )
+
+    def place_limit_order(self, product_id, side, size, limit_price):
+        return self.place_order(
+            product_id=product_id,
+            side=side,
+            size=size,
+            order_type="limit",
+            limit_price=limit_price,
+        )
+
+    def place_order(self, product_id, side, size,
+                    order_type="market", limit_price=None):
+        path = "/v2/orders"
+        payload = {
+            "product_id": product_id,
+            "size": size,
+            "side": side.lower(),
+            "order_type": order_type.lower(),
+        }
+        if order_type.lower() == "limit":
+            payload["limit_price"] = limit_price
+
+        body = json.dumps(payload)
+
+        r = requests.post(
+            self.base_url + path,
+            headers=self._headers("POST", path, body),
+            data=body,
+            timeout=15,
+        )
+        r.raise_for_status()
+        return r.json()
+
+    def close_position(self, product_id, side, size):
+        opposite = "buy" if side.lower() == "sell" else "sell"
+        return self.place_market_order(product_id, opposite, size)
+
+    def health(self):
+        try:
+            self.get_balance()
+            return True
+        except Exception:
+            return False
+
+
+if __name__ == "__main__":
+    broker = DeltaBroker()
+    print("Connection:", broker.health())
