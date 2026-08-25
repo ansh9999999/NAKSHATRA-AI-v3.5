@@ -1,23 +1,25 @@
 """
 NAKSHATRA AI v4.0
-Delta Exchange India - Robust Market Data Helper
-
 ROOT delta.py
 
-Provides:
-- Live ticker
-- Current price
+Delta Exchange India market-data helper.
+
+FIXES:
+- BTCUSD / ETHUSD symbol-price cross mapping protection
+- Exact symbol validation
+- Bulk ticker fallback
+- Robust ticker extraction
 - Candle history
 - Multi-timeframe history
-- Safe timestamp handling
-- Retry + timeout
+- Safe timestamps
+- Retry / timeout
 - Compatible get_history()
 - Compatible get_multi_timeframe_history()
 """
 
 import os
 import time
-from datetime import datetime, timezone
+from datetime import datetime
 
 import requests
 import pandas as pd
@@ -33,14 +35,14 @@ BASE_URL = os.getenv(
 ).rstrip("/")
 
 if BASE_URL.endswith("/v2"):
-    CANDLE_URL = f"{BASE_URL}/history/candles"
     TICKER_URL = f"{BASE_URL}/tickers"
+    CANDLE_URL = f"{BASE_URL}/history/candles"
 else:
-    CANDLE_URL = f"{BASE_URL}/v2/history/candles"
     TICKER_URL = f"{BASE_URL}/v2/tickers"
+    CANDLE_URL = f"{BASE_URL}/v2/history/candles"
 
 TIMEOUT = 15
-RETRIES = 2
+RETRIES = 3
 
 
 # ==========================================================
@@ -56,6 +58,16 @@ session.headers.update({
 
 
 # ==========================================================
+# SUPPORTED SYMBOLS
+# ==========================================================
+
+SUPPORTED_SYMBOLS = {
+    "BTCUSD",
+    "ETHUSD",
+}
+
+
+# ==========================================================
 # SAFE FLOAT
 # ==========================================================
 
@@ -63,6 +75,9 @@ def _float(value, default=0.0):
     try:
         if value is None:
             return default
+
+        if isinstance(value, str):
+            value = value.strip()
 
         return float(value)
 
@@ -82,12 +97,50 @@ def _int(value, default=None):
 
 
 # ==========================================================
+# SYMBOL NORMALIZER
+# ==========================================================
+
+def _normalize_symbol(symbol):
+    symbol = str(symbol or "").upper().strip()
+
+    aliases = {
+        "BTC": "BTCUSD",
+        "BTC/USDT": "BTCUSD",
+        "BTC-USDT": "BTCUSD",
+        "BTCUSD": "BTCUSD",
+
+        "ETH": "ETHUSD",
+        "ETH/USDT": "ETHUSD",
+        "ETH-USDT": "ETHUSD",
+        "ETHUSD": "ETHUSD",
+    }
+
+    return aliases.get(symbol, symbol)
+
+
+# ==========================================================
+# SYMBOL VALIDATION
+# ==========================================================
+
+def _validate_symbol(symbol):
+    symbol = _normalize_symbol(symbol)
+
+    if symbol not in SUPPORTED_SYMBOLS:
+        raise ValueError(
+            f"Unsupported Delta symbol: {symbol}. "
+            f"Allowed: BTCUSD, ETHUSD"
+        )
+
+    return symbol
+
+
+# ==========================================================
 # SAFE TIMESTAMP
 # ==========================================================
 
 def _timestamp_seconds(value):
     """
-    Convert Delta timestamp into Unix seconds.
+    Convert timestamp to Unix seconds.
 
     Supports:
     - Unix seconds
@@ -95,16 +148,13 @@ def _timestamp_seconds(value):
     - microseconds
     - datetime
     - pandas Timestamp
-    - ISO datetime string
+    - ISO strings
     """
 
     if value is None:
         return None
 
-    # ------------------------------------------------------
     # datetime / pandas Timestamp
-    # ------------------------------------------------------
-
     if isinstance(value, (datetime, pd.Timestamp)):
         try:
             ts = pd.Timestamp(value)
@@ -119,10 +169,7 @@ def _timestamp_seconds(value):
         except Exception:
             return None
 
-    # ------------------------------------------------------
     # Numeric timestamp
-    # ------------------------------------------------------
-
     try:
         number = float(value)
 
@@ -144,10 +191,7 @@ def _timestamp_seconds(value):
     except Exception:
         pass
 
-    # ------------------------------------------------------
-    # ISO / string datetime
-    # ------------------------------------------------------
-
+    # String / ISO timestamp
     try:
         text = str(value).strip()
 
@@ -174,6 +218,7 @@ def _timestamp_seconds(value):
 # ==========================================================
 
 def _empty_dataframe():
+
     df = pd.DataFrame(
         columns=[
             "timestamp",
@@ -185,9 +230,145 @@ def _empty_dataframe():
         ]
     )
 
-    df.index = pd.DatetimeIndex([], name="datetime")
+    df.index = pd.DatetimeIndex(
+        [],
+        name="datetime"
+    )
 
     return df
+
+
+# ==========================================================
+# HTTP GET WITH RETRY
+# ==========================================================
+
+def _get_json(url, params=None):
+
+    last_error = None
+
+    for attempt in range(RETRIES):
+
+        try:
+
+            response = session.get(
+                url,
+                params=params,
+                timeout=TIMEOUT
+            )
+
+            response.raise_for_status()
+
+            payload = response.json()
+
+            if not isinstance(payload, dict):
+                raise ValueError(
+                    "Delta returned non-dict JSON"
+                )
+
+            return payload
+
+        except Exception as exc:
+
+            last_error = exc
+
+            print(
+                f"Delta HTTP error "
+                f"attempt={attempt + 1}/{RETRIES}: "
+                f"{exc}"
+            )
+
+            if attempt < RETRIES - 1:
+                time.sleep(0.5)
+
+    raise last_error
+
+
+# ==========================================================
+# EXTRACT TICKER RESULT
+# ==========================================================
+
+def _extract_ticker_result(payload, requested_symbol):
+
+    if not isinstance(payload, dict):
+        return None
+
+    result = payload.get("result")
+
+    if isinstance(result, dict):
+
+        # Normal /tickers/{symbol} response
+        result_symbol = _normalize_symbol(
+            result.get("symbol")
+        )
+
+        if result_symbol == requested_symbol:
+            return result
+
+        # Some API responses can return nested data
+        for key in (
+            "data",
+            "ticker",
+            "result",
+        ):
+
+            nested = result.get(key)
+
+            if isinstance(nested, dict):
+
+                nested_symbol = _normalize_symbol(
+                    nested.get("symbol")
+                )
+
+                if nested_symbol == requested_symbol:
+                    return nested
+
+    elif isinstance(result, list):
+
+        for item in result:
+
+            if not isinstance(item, dict):
+                continue
+
+            item_symbol = _normalize_symbol(
+                item.get("symbol")
+            )
+
+            if item_symbol == requested_symbol:
+                return item
+
+    return None
+
+
+# ==========================================================
+# GET ALL TICKERS
+# ==========================================================
+
+def _get_all_tickers():
+
+    payload = _get_json(
+        TICKER_URL
+    )
+
+    result = payload.get("result")
+
+    if isinstance(result, list):
+        return result
+
+    if isinstance(result, dict):
+
+        for key in (
+            "data",
+            "tickers",
+            "rows",
+            "result",
+        ):
+
+            value = result.get(key)
+
+            if isinstance(value, list):
+                return value
+
+    return []
 
 
 # ==========================================================
@@ -196,63 +377,243 @@ def _empty_dataframe():
 
 def get_ticker(symbol="BTCUSD"):
     """
-    Get live ticker from Delta Exchange India.
+    Get exact live ticker from Delta Exchange India.
+
+    IMPORTANT:
+    The requested symbol MUST match the symbol returned
+    by Delta. This prevents BTCUSD / ETHUSD cross-mapping.
     """
 
-    symbol = str(symbol).upper().strip()
+    requested_symbol = _validate_symbol(symbol)
 
-    url = f"{TICKER_URL}/{symbol}"
+    # ------------------------------------------------------
+    # METHOD 1
+    # Exact /tickers/{symbol}
+    # ------------------------------------------------------
 
     try:
 
-        response = session.get(
-            url,
-            timeout=TIMEOUT
+        url = f"{TICKER_URL}/{requested_symbol}"
+
+        payload = _get_json(url)
+
+        result = _extract_ticker_result(
+            payload,
+            requested_symbol
         )
 
-        response.raise_for_status()
+        if result:
 
-        payload = response.json()
+            returned_symbol = _normalize_symbol(
+                result.get("symbol")
+            )
 
-        result = payload.get("result")
+            # HARD SAFETY CHECK
+            if returned_symbol != requested_symbol:
 
-        if not result:
+                print(
+                    "Delta ticker symbol mismatch: "
+                    f"requested={requested_symbol}, "
+                    f"returned={returned_symbol}"
+                )
+
+            else:
+
+                price = (
+                    result.get("close")
+                    if result.get("close") is not None
+                    else result.get("mark_price")
+                )
+
+                if price is None:
+                    price = result.get("spot_price")
+
+                price = _float(price, None)
+
+                if price is not None and price > 0:
+
+                    return {
+                        "symbol": returned_symbol,
+
+                        "price": price,
+
+                        "close": price,
+
+                        "mark_price": _float(
+                            result.get(
+                                "mark_price"
+                            ),
+                            price
+                        ),
+
+                        "spot_price": _float(
+                            result.get(
+                                "spot_price"
+                            ),
+                            0.0
+                        ),
+
+                        "volume": _float(
+                            result.get(
+                                "volume"
+                            ),
+                            0.0
+                        ),
+
+                        "open": _float(
+                            result.get(
+                                "open"
+                            ),
+                            0.0
+                        ),
+
+                        "high": _float(
+                            result.get(
+                                "high"
+                            ),
+                            0.0
+                        ),
+
+                        "low": _float(
+                            result.get(
+                                "low"
+                            ),
+                            0.0
+                        ),
+
+                        "source": "delta_exact",
+                    }
+
+    except Exception as exc:
+
+        print(
+            f"Delta exact ticker failed "
+            f"[{requested_symbol}]: {exc}"
+        )
+
+
+    # ------------------------------------------------------
+    # METHOD 2
+    # Bulk /tickers fallback
+    #
+    # This is the important protection against a wrong
+    # symbol response.
+    # ------------------------------------------------------
+
+    try:
+
+        tickers = _get_all_tickers()
+
+        exact = None
+
+        for item in tickers:
+
+            if not isinstance(item, dict):
+                continue
+
+            item_symbol = _normalize_symbol(
+                item.get("symbol")
+            )
+
+            if item_symbol == requested_symbol:
+
+                exact = item
+                break
+
+        if exact is None:
+
+            print(
+                f"Delta bulk ticker: "
+                f"{requested_symbol} not found"
+            )
+
             return None
 
-        price = (
-            result.get("close")
-            or result.get("mark_price")
-            or result.get("spot_price")
+        returned_symbol = _normalize_symbol(
+            exact.get("symbol")
         )
 
-        return {
-            "symbol": result.get(
-                "symbol",
-                symbol
-            ),
+        # HARD SAFETY CHECK
+        if returned_symbol != requested_symbol:
 
-            "price": _float(price),
+            print(
+                "Delta bulk ticker mismatch: "
+                f"requested={requested_symbol}, "
+                f"returned={returned_symbol}"
+            )
+
+            return None
+
+        price = exact.get("close")
+
+        if price is None:
+            price = exact.get("mark_price")
+
+        if price is None:
+            price = exact.get("spot_price")
+
+        price = _float(price, None)
+
+        if price is None or price <= 0:
+            return None
+
+        return {
+            "symbol": returned_symbol,
+
+            "price": price,
+
+            "close": price,
 
             "mark_price": _float(
-                result.get(
-                    "mark_price",
-                    price
-                )
+                exact.get(
+                    "mark_price"
+                ),
+                price
+            ),
+
+            "spot_price": _float(
+                exact.get(
+                    "spot_price"
+                ),
+                0.0
             ),
 
             "volume": _float(
-                result.get(
-                    "volume",
-                    0
-                )
+                exact.get(
+                    "volume"
+                ),
+                0.0
             ),
+
+            "open": _float(
+                exact.get(
+                    "open"
+                ),
+                0.0
+            ),
+
+            "high": _float(
+                exact.get(
+                    "high"
+                ),
+                0.0
+            ),
+
+            "low": _float(
+                exact.get(
+                    "low"
+                ),
+                0.0
+            ),
+
+            "source": "delta_bulk",
         }
 
     except Exception as exc:
 
         print(
-            f"Delta ticker error "
-            f"[{symbol}]: {exc}"
+            f"Delta bulk ticker failed "
+            f"[{requested_symbol}]: {exc}"
         )
 
         return None
@@ -307,14 +668,11 @@ RESOLUTION_SECONDS = {
 
     "1w": 604800,
 
-    # Approximate month window.
-    # Used only for historical request.
-    "1mo": 2592000,
 }
 
 
 # ==========================================================
-# NORMALIZE RESULT
+# EXTRACT CANDLE ROWS
 # ==========================================================
 
 def _extract_rows(payload):
@@ -354,28 +712,87 @@ def get_candles(
     limit=200
 ):
     """
-    Download historical candles.
+    Download historical OHLCV candles.
 
-    Returns DataFrame:
-
-    timestamp
-    open
-    high
-    low
-    close
-    volume
+    Returns:
+        DataFrame with:
+        timestamp
+        open
+        high
+        low
+        close
+        volume
 
     Index:
-    UTC datetime
+        UTC datetime
     """
 
-    symbol = str(
-        symbol
-    ).upper().strip()
+    symbol = _validate_symbol(symbol)
 
     resolution = str(
         resolution
     ).lower().strip()
+
+
+    # ------------------------------------------------------
+    # 1 MONTH
+    #
+    # Delta REST supports standard candle resolutions.
+    # Build monthly candles locally from daily candles.
+    # ------------------------------------------------------
+
+    if resolution == "1mo":
+
+        try:
+
+            daily = get_candles(
+                symbol=symbol,
+                resolution="1d",
+                limit=max(
+                    int(limit) * 32,
+                    60
+                )
+            )
+
+            if daily.empty:
+                return _empty_dataframe()
+
+            monthly = (
+                daily
+                .resample("MS")
+                .agg({
+                    "timestamp": "first",
+                    "open": "first",
+                    "high": "max",
+                    "low": "min",
+                    "close": "last",
+                    "volume": "sum",
+                })
+                .dropna(
+                    subset=[
+                        "open",
+                        "high",
+                        "low",
+                        "close",
+                    ]
+                )
+            )
+
+            monthly = monthly.tail(
+                int(limit)
+            )
+
+            return monthly
+
+        except Exception as exc:
+
+            print(
+                f"Delta monthly error "
+                f"[{symbol}]: {exc}"
+            )
+
+            return _empty_dataframe()
+
 
     # ------------------------------------------------------
     # Resolution validation
@@ -384,11 +801,12 @@ def get_candles(
     if resolution not in RESOLUTION_SECONDS:
 
         print(
-            f"Delta: unsupported resolution "
+            f"Delta unsupported resolution "
             f"{resolution}; using 5m"
         )
 
         resolution = "5m"
+
 
     # ------------------------------------------------------
     # Limit
@@ -402,24 +820,25 @@ def get_candles(
 
     limit = max(
         10,
-        min(limit, 1000)
+        min(
+            limit,
+            2000
+        )
     )
 
-    candle_seconds = RESOLUTION_SECONDS[
-        resolution
-    ]
+
+    candle_seconds = (
+        RESOLUTION_SECONDS[
+            resolution
+        ]
+    )
+
 
     # ------------------------------------------------------
     # Unix time
-    #
-    # IMPORTANT:
-    # Keep API start/end as INTEGER Unix seconds.
-    # Do not pass datetime objects to Delta.
     # ------------------------------------------------------
 
-    now = int(time.time())
-
-    end = now
+    end = int(time.time())
 
     start = (
         end -
@@ -429,6 +848,7 @@ def get_candles(
         )
     )
 
+
     params = {
         "symbol": symbol,
         "resolution": resolution,
@@ -436,27 +856,25 @@ def get_candles(
         "end": int(end),
     }
 
+
     # ------------------------------------------------------
-    # Request with retry
+    # Request
     # ------------------------------------------------------
 
     last_error = None
 
-    for attempt in range(RETRIES + 1):
+    for attempt in range(RETRIES):
 
         try:
 
-            response = session.get(
+            payload = _get_json(
                 CANDLE_URL,
-                params=params,
-                timeout=TIMEOUT
+                params=params
             )
 
-            response.raise_for_status()
-
-            payload = response.json()
-
-            rows = _extract_rows(payload)
+            rows = _extract_rows(
+                payload
+            )
 
             if not rows:
 
@@ -467,10 +885,12 @@ def get_candles(
 
                 return _empty_dataframe()
 
+
             df = pd.DataFrame(rows)
 
             if df.empty:
                 return _empty_dataframe()
+
 
             # --------------------------------------------------
             # TIMESTAMP
@@ -496,13 +916,18 @@ def get_candles(
 
                 return _empty_dataframe()
 
+
             df["timestamp"] = (
-                df[timestamp_column]
-                .apply(_timestamp_seconds)
+                df[
+                    timestamp_column
+                ].apply(
+                    _timestamp_seconds
+                )
             )
 
+
             # --------------------------------------------------
-            # OHLCV
+            # OHLC
             # --------------------------------------------------
 
             required = [
@@ -517,8 +942,10 @@ def get_candles(
                 if column not in df.columns:
 
                     print(
-                        f"Delta: missing {column} "
-                        f"{symbol} {resolution}"
+                        f"Delta: missing "
+                        f"{column} "
+                        f"{symbol} "
+                        f"{resolution}"
                     )
 
                     return _empty_dataframe()
@@ -527,6 +954,11 @@ def get_candles(
                     df[column],
                     errors="coerce"
                 )
+
+
+            # --------------------------------------------------
+            # VOLUME
+            # --------------------------------------------------
 
             if "volume" in df.columns:
 
@@ -538,6 +970,7 @@ def get_candles(
             else:
 
                 df["volume"] = 0.0
+
 
             # --------------------------------------------------
             # CLEAN
@@ -554,11 +987,13 @@ def get_candles(
                 inplace=True
             )
 
+
             if df.empty:
                 return _empty_dataframe()
 
+
             # --------------------------------------------------
-            # Force timestamp to integer seconds
+            # INTEGER TIMESTAMP
             # --------------------------------------------------
 
             df["timestamp"] = (
@@ -566,18 +1001,22 @@ def get_candles(
                 .astype("int64")
             )
 
+
             # --------------------------------------------------
-            # Remove duplicate candles
+            # DUPLICATES
             # --------------------------------------------------
 
             df.drop_duplicates(
-                subset=["timestamp"],
+                subset=[
+                    "timestamp"
+                ],
                 keep="last",
                 inplace=True
             )
 
+
             # --------------------------------------------------
-            # Sort
+            # SORT
             # --------------------------------------------------
 
             df.sort_values(
@@ -590,12 +1029,9 @@ def get_candles(
                 inplace=True
             )
 
+
             # --------------------------------------------------
             # DATETIME INDEX
-            #
-            # IMPORTANT:
-            # Keep timestamp column numeric.
-            # Keep DataFrame index as datetime.
             # --------------------------------------------------
 
             df["datetime"] = pd.to_datetime(
@@ -606,12 +1042,16 @@ def get_candles(
             )
 
             df.dropna(
-                subset=["datetime"],
+                subset=[
+                    "datetime"
+                ],
                 inplace=True
             )
 
+
             if df.empty:
                 return _empty_dataframe()
+
 
             df.set_index(
                 "datetime",
@@ -620,9 +1060,6 @@ def get_candles(
 
             df.index.name = "datetime"
 
-            df.sort_index(
-                inplace=True
-            )
 
             # --------------------------------------------------
             # FINAL COLUMN ORDER
@@ -639,41 +1076,27 @@ def get_candles(
                 ]
             ]
 
+
+            # --------------------------------------------------
+            # LAST LIMIT
+            # --------------------------------------------------
+
+            df = df.tail(
+                limit
+            )
+
+
             print(
                 f"Delta candles OK: "
-                f"{symbol} {resolution} "
+                f"{symbol} "
+                f"{resolution} "
                 f"rows={len(df)} "
                 f"last={df.index[-1]}"
             )
 
+
             return df
 
-        except requests.RequestException as exc:
-
-            last_error = exc
-
-            print(
-                f"Delta request error "
-                f"[{symbol} {resolution}] "
-                f"attempt={attempt + 1}: "
-                f"{exc}"
-            )
-
-            if attempt < RETRIES:
-                time.sleep(0.5)
-
-        except ValueError as exc:
-
-            last_error = exc
-
-            print(
-                f"Delta JSON/data error "
-                f"[{symbol} {resolution}]: "
-                f"{exc}"
-            )
-
-            if attempt < RETRIES:
-                time.sleep(0.5)
 
         except Exception as exc:
 
@@ -681,12 +1104,14 @@ def get_candles(
 
             print(
                 f"Delta candle error "
-                f"[{symbol} {resolution}]: "
+                f"[{symbol} {resolution}] "
+                f"attempt={attempt + 1}: "
                 f"{exc}"
             )
 
-            if attempt < RETRIES:
+            if attempt < RETRIES - 1:
                 time.sleep(0.5)
+
 
     print(
         f"Delta candle FAILED "
@@ -717,133 +1142,3 @@ def get_history(
 # ==========================================================
 # MULTI TIMEFRAME HISTORY
 # ==========================================================
-
-def get_multi_timeframe_history(
-    symbol="BTCUSD",
-    limit=200
-):
-    """
-    Return:
-
-    5m
-    15m
-    1h
-    1d
-    1w
-    1mo
-
-    Each timeframe is independent.
-    One failed timeframe does not destroy
-    the complete result.
-    """
-
-    timeframes = [
-        "5m",
-        "15m",
-        "1h",
-        "1d",
-        "1w",
-        "1mo",
-    ]
-
-    result = {}
-
-    for timeframe in timeframes:
-
-        try:
-
-            result[timeframe] = get_candles(
-                symbol=symbol,
-                resolution=timeframe,
-                limit=limit
-            )
-
-        except Exception as exc:
-
-            print(
-                f"MTF error "
-                f"{symbol} {timeframe}: "
-                f"{exc}"
-            )
-
-            result[timeframe] = (
-                _empty_dataframe()
-            )
-
-    return result
-
-
-# ==========================================================
-# CONNECTION TEST
-# ==========================================================
-
-if __name__ == "__main__":
-
-    print("=" * 60)
-    print("NAKSHATRA AI - DELTA CONNECTION TEST")
-    print("=" * 60)
-
-    # ------------------------------------------------------
-    # BTC ticker
-    # ------------------------------------------------------
-
-    btc = get_ticker("BTCUSD")
-
-    print("\nBTC TICKER:")
-    print(btc)
-
-    # ------------------------------------------------------
-    # ETH ticker
-    # ------------------------------------------------------
-
-    eth = get_ticker("ETHUSD")
-
-    print("\nETH TICKER:")
-    print(eth)
-
-    # ------------------------------------------------------
-    # BTC 5M
-    # ------------------------------------------------------
-
-    candles = get_candles(
-        "BTCUSD",
-        "5m",
-        20
-    )
-
-    print("\nBTC 5M CANDLES:")
-
-    if candles.empty:
-
-        print("NO CANDLE DATA")
-
-    else:
-
-        print(
-            candles.tail(5).to_string()
-        )
-
-        print(
-            "\nLAST CANDLE INDEX:",
-            candles.index[-1]
-        )
-
-    # ------------------------------------------------------
-    # MTF TEST
-    # ------------------------------------------------------
-
-    print("\nMULTI TIMEFRAME TEST:")
-
-    mtf = get_multi_timeframe_history(
-        "BTCUSD",
-        20
-    )
-
-    for tf, data in mtf.items():
-
-        print(
-            f"{tf}: "
-            f"{len(data)} rows"
-        )
-
-    print("=" * 60)
