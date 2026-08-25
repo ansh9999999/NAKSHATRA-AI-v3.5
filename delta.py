@@ -1,6 +1,6 @@
 """
 NAKSHATRA AI v4.0
-Delta Exchange India - Market Data Helper
+Delta Exchange India - Robust Market Data Helper
 
 ROOT delta.py
 
@@ -10,23 +10,41 @@ Provides:
 - Candle history
 - Multi-timeframe history
 - Safe timestamp handling
+- Retry + timeout
+- Compatible get_history()
+- Compatible get_multi_timeframe_history()
 """
 
+import os
 import time
+from datetime import datetime, timezone
+
 import requests
 import pandas as pd
 
 
 # ==========================================================
-# DELTA EXCHANGE INDIA
+# CONFIG
 # ==========================================================
 
-BASE_URL = "https://api.india.delta.exchange/v2"
+BASE_URL = os.getenv(
+    "DELTA_BASE_URL",
+    "https://api.india.delta.exchange/v2"
+).rstrip("/")
+
+if BASE_URL.endswith("/v2"):
+    CANDLE_URL = f"{BASE_URL}/history/candles"
+    TICKER_URL = f"{BASE_URL}/tickers"
+else:
+    CANDLE_URL = f"{BASE_URL}/v2/history/candles"
+    TICKER_URL = f"{BASE_URL}/v2/tickers"
+
 TIMEOUT = 15
+RETRIES = 2
 
 
 # ==========================================================
-# HTTP SESSION
+# SESSION
 # ==========================================================
 
 session = requests.Session()
@@ -43,7 +61,22 @@ session.headers.update({
 
 def _float(value, default=0.0):
     try:
+        if value is None:
+            return default
+
         return float(value)
+
+    except Exception:
+        return default
+
+
+# ==========================================================
+# SAFE INT
+# ==========================================================
+
+def _int(value, default=None):
+    try:
+        return int(float(value))
     except Exception:
         return default
 
@@ -54,28 +87,107 @@ def _float(value, default=0.0):
 
 def _timestamp_seconds(value):
     """
-    Convert Delta timestamp to Unix seconds.
+    Convert Delta timestamp into Unix seconds.
 
     Supports:
-    - seconds
+    - Unix seconds
     - milliseconds
     - microseconds
+    - datetime
+    - pandas Timestamp
+    - ISO datetime string
     """
 
+    if value is None:
+        return None
+
+    # ------------------------------------------------------
+    # datetime / pandas Timestamp
+    # ------------------------------------------------------
+
+    if isinstance(value, (datetime, pd.Timestamp)):
+        try:
+            ts = pd.Timestamp(value)
+
+            if ts.tzinfo is None:
+                ts = ts.tz_localize("UTC")
+            else:
+                ts = ts.tz_convert("UTC")
+
+            return int(ts.timestamp())
+
+        except Exception:
+            return None
+
+    # ------------------------------------------------------
+    # Numeric timestamp
+    # ------------------------------------------------------
+
     try:
-        ts = int(float(value))
+        number = float(value)
+
+        if number != number:
+            return None
+
+        ts = int(number)
+
+        # microseconds
+        if abs(ts) > 10_000_000_000_000:
+            ts //= 1_000_000
+
+        # milliseconds
+        elif abs(ts) > 10_000_000_000:
+            ts //= 1_000
+
+        return ts
+
+    except Exception:
+        pass
+
+    # ------------------------------------------------------
+    # ISO / string datetime
+    # ------------------------------------------------------
+
+    try:
+        text = str(value).strip()
+
+        if not text:
+            return None
+
+        parsed = pd.to_datetime(
+            text,
+            utc=True,
+            errors="coerce"
+        )
+
+        if pd.isna(parsed):
+            return None
+
+        return int(parsed.timestamp())
+
     except Exception:
         return None
 
-    # microseconds
-    if ts > 10_000_000_000_000:
-        ts //= 1_000_000
 
-    # milliseconds
-    elif ts > 10_000_000_000:
-        ts //= 1_000
+# ==========================================================
+# EMPTY DATAFRAME
+# ==========================================================
 
-    return ts
+def _empty_dataframe():
+    df = pd.DataFrame(
+        columns=[
+            "timestamp",
+            "open",
+            "high",
+            "low",
+            "close",
+            "volume",
+        ]
+    )
+
+    df.index = pd.DatetimeIndex([], name="datetime")
+
+    return df
 
 
 # ==========================================================
@@ -89,8 +201,9 @@ def get_ticker(symbol="BTCUSD"):
 
     symbol = str(symbol).upper().strip()
 
+    url = f"{TICKER_URL}/{symbol}"
+
     try:
-        url = f"{BASE_URL}/tickers/{symbol}"
 
         response = session.get(
             url,
@@ -113,20 +226,35 @@ def get_ticker(symbol="BTCUSD"):
         )
 
         return {
-            "symbol": result.get("symbol", symbol),
-            "price": _float(price),
-            "mark_price": _float(
-                result.get("mark_price", price)
+            "symbol": result.get(
+                "symbol",
+                symbol
             ),
+
+            "price": _float(price),
+
+            "mark_price": _float(
+                result.get(
+                    "mark_price",
+                    price
+                )
+            ),
+
             "volume": _float(
-                result.get("volume", 0)
+                result.get(
+                    "volume",
+                    0
+                )
             ),
         }
 
     except Exception as exc:
+
         print(
-            f"Delta ticker error [{symbol}]: {exc}"
+            f"Delta ticker error "
+            f"[{symbol}]: {exc}"
         )
+
         return None
 
 
@@ -135,6 +263,7 @@ def get_ticker(symbol="BTCUSD"):
 # ==========================================================
 
 def get_current_price(symbol="BTCUSD"):
+
     ticker = get_ticker(symbol)
 
     if not ticker:
@@ -149,23 +278,70 @@ def get_current_price(symbol="BTCUSD"):
 
 
 # ==========================================================
-# CANDLE RESOLUTIONS
+# RESOLUTIONS
 # ==========================================================
 
 RESOLUTION_SECONDS = {
+
     "1m": 60,
+
     "3m": 180,
+
     "5m": 300,
+
     "15m": 900,
+
     "30m": 1800,
+
     "1h": 3600,
+
     "2h": 7200,
+
     "4h": 14400,
+
     "6h": 21600,
+
     "12h": 43200,
+
     "1d": 86400,
+
     "1w": 604800,
+
+    # Approximate month window.
+    # Used only for historical request.
+    "1mo": 2592000,
 }
+
+
+# ==========================================================
+# NORMALIZE RESULT
+# ==========================================================
+
+def _extract_rows(payload):
+
+    if not isinstance(payload, dict):
+        return []
+
+    result = payload.get("result")
+
+    if isinstance(result, list):
+        return result
+
+    if isinstance(result, dict):
+
+        for key in (
+            "candles",
+            "data",
+            "rows",
+            "result",
+        ):
+
+            value = result.get(key)
+
+            if isinstance(value, list):
+                return value
+
+    return []
 
 
 # ==========================================================
@@ -180,251 +356,345 @@ def get_candles(
     """
     Download historical candles.
 
-    Returns DataFrame with:
+    Returns DataFrame:
 
-    datetime
     timestamp
     open
     high
     low
     close
     volume
+
+    Index:
+    UTC datetime
     """
 
-    symbol = str(symbol).upper().strip()
-    resolution = str(resolution).lower().strip()
+    symbol = str(
+        symbol
+    ).upper().strip()
+
+    resolution = str(
+        resolution
+    ).lower().strip()
+
+    # ------------------------------------------------------
+    # Resolution validation
+    # ------------------------------------------------------
 
     if resolution not in RESOLUTION_SECONDS:
+
+        print(
+            f"Delta: unsupported resolution "
+            f"{resolution}; using 5m"
+        )
+
         resolution = "5m"
+
+    # ------------------------------------------------------
+    # Limit
+    # ------------------------------------------------------
 
     try:
         limit = int(limit)
+
     except Exception:
         limit = 200
 
-    limit = max(10, min(limit, 1000))
+    limit = max(
+        10,
+        min(limit, 1000)
+    )
 
-    candle_seconds = RESOLUTION_SECONDS[resolution]
+    candle_seconds = RESOLUTION_SECONDS[
+        resolution
+    ]
 
     # ------------------------------------------------------
-    # START / END
+    # Unix time
+    #
+    # IMPORTANT:
+    # Keep API start/end as INTEGER Unix seconds.
+    # Do not pass datetime objects to Delta.
     # ------------------------------------------------------
 
     now = int(time.time())
 
-    end = now - (now % candle_seconds)
+    end = now
 
-    start = end - (
-        limit * candle_seconds
+    start = (
+        end -
+        (
+            limit *
+            candle_seconds
+        )
     )
-
-    url = f"{BASE_URL}/history/candles"
 
     params = {
         "symbol": symbol,
         "resolution": resolution,
-        "start": start,
-        "end": end,
+        "start": int(start),
+        "end": int(end),
     }
 
-    try:
+    # ------------------------------------------------------
+    # Request with retry
+    # ------------------------------------------------------
 
-        response = session.get(
-            url,
-            params=params,
-            timeout=TIMEOUT
-        )
+    last_error = None
 
-        response.raise_for_status()
+    for attempt in range(RETRIES + 1):
 
-        payload = response.json()
+        try:
 
-        rows = payload.get("result", [])
-
-        if not rows:
-            print(
-                f"Delta: no candles "
-                f"{symbol} {resolution}"
-            )
-            return pd.DataFrame()
-
-        df = pd.DataFrame(rows)
-
-        if df.empty:
-            return pd.DataFrame()
-
-        # --------------------------------------------------
-        # TIMESTAMP
-        # --------------------------------------------------
-
-        if "time" in df.columns:
-
-            df["timestamp"] = (
-                df["time"]
-                .apply(_timestamp_seconds)
+            response = session.get(
+                CANDLE_URL,
+                params=params,
+                timeout=TIMEOUT
             )
 
-        elif "timestamp" in df.columns:
+            response.raise_for_status()
 
-            df["timestamp"] = (
-                df["timestamp"]
-                .apply(_timestamp_seconds)
-            )
+            payload = response.json()
 
-        else:
+            rows = _extract_rows(payload)
 
-            print(
-                f"Delta: timestamp missing "
-                f"{symbol} {resolution}"
-            )
+            if not rows:
 
-            return pd.DataFrame()
-
-        # --------------------------------------------------
-        # OHLCV
-        # --------------------------------------------------
-
-        numeric_columns = [
-            "open",
-            "high",
-            "low",
-            "close",
-            "volume",
-        ]
-
-        for column in numeric_columns:
-
-            if column in df.columns:
-
-                df[column] = pd.to_numeric(
-                    df[column],
-                    errors="coerce"
+                print(
+                    f"Delta: no candles "
+                    f"{symbol} {resolution}"
                 )
 
-            else:
+                return _empty_dataframe()
 
-                if column == "volume":
+            df = pd.DataFrame(rows)
 
-                    df[column] = 0.0
+            if df.empty:
+                return _empty_dataframe()
 
-                else:
+            # --------------------------------------------------
+            # TIMESTAMP
+            # --------------------------------------------------
+
+            timestamp_column = None
+
+            if "time" in df.columns:
+                timestamp_column = "time"
+
+            elif "timestamp" in df.columns:
+                timestamp_column = "timestamp"
+
+            elif "start" in df.columns:
+                timestamp_column = "start"
+
+            if timestamp_column is None:
+
+                print(
+                    f"Delta: timestamp missing "
+                    f"{symbol} {resolution}"
+                )
+
+                return _empty_dataframe()
+
+            df["timestamp"] = (
+                df[timestamp_column]
+                .apply(_timestamp_seconds)
+            )
+
+            # --------------------------------------------------
+            # OHLCV
+            # --------------------------------------------------
+
+            required = [
+                "open",
+                "high",
+                "low",
+                "close",
+            ]
+
+            for column in required:
+
+                if column not in df.columns:
 
                     print(
                         f"Delta: missing {column} "
                         f"{symbol} {resolution}"
                     )
 
-                    return pd.DataFrame()
+                    return _empty_dataframe()
 
-        # --------------------------------------------------
-        # CLEAN
-        # --------------------------------------------------
+                df[column] = pd.to_numeric(
+                    df[column],
+                    errors="coerce"
+                )
 
-        df.dropna(
-            subset=[
+            if "volume" in df.columns:
+
+                df["volume"] = pd.to_numeric(
+                    df["volume"],
+                    errors="coerce"
+                )
+
+            else:
+
+                df["volume"] = 0.0
+
+            # --------------------------------------------------
+            # CLEAN
+            # --------------------------------------------------
+
+            df.dropna(
+                subset=[
+                    "timestamp",
+                    "open",
+                    "high",
+                    "low",
+                    "close",
+                ],
+                inplace=True
+            )
+
+            if df.empty:
+                return _empty_dataframe()
+
+            # --------------------------------------------------
+            # Force timestamp to integer seconds
+            # --------------------------------------------------
+
+            df["timestamp"] = (
+                df["timestamp"]
+                .astype("int64")
+            )
+
+            # --------------------------------------------------
+            # Remove duplicate candles
+            # --------------------------------------------------
+
+            df.drop_duplicates(
+                subset=["timestamp"],
+                keep="last",
+                inplace=True
+            )
+
+            # --------------------------------------------------
+            # Sort
+            # --------------------------------------------------
+
+            df.sort_values(
                 "timestamp",
-                "open",
-                "high",
-                "low",
-                "close",
-            ],
-            inplace=True
-        )
+                inplace=True
+            )
 
-        if df.empty:
-            return pd.DataFrame()
+            df.reset_index(
+                drop=True,
+                inplace=True
+            )
 
-        # --------------------------------------------------
-        # DATETIME
-        # --------------------------------------------------
+            # --------------------------------------------------
+            # DATETIME INDEX
+            #
+            # IMPORTANT:
+            # Keep timestamp column numeric.
+            # Keep DataFrame index as datetime.
+            # --------------------------------------------------
 
-        df["datetime"] = pd.to_datetime(
-            df["timestamp"],
-            unit="s",
-            utc=True
-        )
+            df["datetime"] = pd.to_datetime(
+                df["timestamp"],
+                unit="s",
+                utc=True,
+                errors="coerce"
+            )
 
-        # --------------------------------------------------
-        # SORT
-        # --------------------------------------------------
+            df.dropna(
+                subset=["datetime"],
+                inplace=True
+            )
 
-        df.sort_values(
-            "timestamp",
-            inplace=True
-        )
+            if df.empty:
+                return _empty_dataframe()
 
-        df.reset_index(
-            drop=True,
-            inplace=True
-        )
+            df.set_index(
+                "datetime",
+                inplace=True
+            )
 
-        # --------------------------------------------------
-        # IMPORTANT TIMESTAMP FIX
-        #
-        # signal.py uses:
-        #
-        # timestamp = entry_df.index[-1]
-        #
-        # Therefore DataFrame index MUST be datetime.
-        # --------------------------------------------------
+            df.index.name = "datetime"
 
-        df.set_index(
-            "datetime",
-            inplace=True
-        )
+            df.sort_index(
+                inplace=True
+            )
 
-        # Make sure index is sorted
-        df.sort_index(
-            inplace=True
-        )
+            # --------------------------------------------------
+            # FINAL COLUMN ORDER
+            # --------------------------------------------------
 
-        # --------------------------------------------------
-        # FINAL COLUMN ORDER
-        # --------------------------------------------------
+            df = df[
+                [
+                    "timestamp",
+                    "open",
+                    "high",
+                    "low",
+                    "close",
+                    "volume",
+                ]
+            ]
 
-        columns = [
-            "timestamp",
-            "open",
-            "high",
-            "low",
-            "close",
-            "volume",
-        ]
+            print(
+                f"Delta candles OK: "
+                f"{symbol} {resolution} "
+                f"rows={len(df)} "
+                f"last={df.index[-1]}"
+            )
 
-        available = [
-            column
-            for column in columns
-            if column in df.columns
-        ]
+            return df
 
-        df = df[available]
+        except requests.RequestException as exc:
 
-        print(
-            f"Delta candles OK: "
-            f"{symbol} {resolution} "
-            f"rows={len(df)} "
-            f"last={df.index[-1]}"
-        )
+            last_error = exc
 
-        return df
+            print(
+                f"Delta request error "
+                f"[{symbol} {resolution}] "
+                f"attempt={attempt + 1}: "
+                f"{exc}"
+            )
 
-    except requests.RequestException as exc:
+            if attempt < RETRIES:
+                time.sleep(0.5)
 
-        print(
-            f"Delta candle request error "
-            f"[{symbol} {resolution}]: {exc}"
-        )
+        except ValueError as exc:
 
-        return pd.DataFrame()
+            last_error = exc
 
-    except Exception as exc:
+            print(
+                f"Delta JSON/data error "
+                f"[{symbol} {resolution}]: "
+                f"{exc}"
+            )
 
-        print(
-            f"Delta candle error "
-            f"[{symbol} {resolution}]: {exc}"
-        )
+            if attempt < RETRIES:
+                time.sleep(0.5)
 
-        return pd.DataFrame()
+        except Exception as exc:
+
+            last_error = exc
+
+            print(
+                f"Delta candle error "
+                f"[{symbol} {resolution}]: "
+                f"{exc}"
+            )
+
+            if attempt < RETRIES:
+                time.sleep(0.5)
+
+    print(
+        f"Delta candle FAILED "
+        f"[{symbol} {resolution}]: "
+        f"{last_error}"
+    )
+
+    return _empty_dataframe()
 
 
 # ==========================================================
@@ -436,6 +706,7 @@ def get_history(
     resolution="5m",
     limit=200
 ):
+
     return get_candles(
         symbol=symbol,
         resolution=resolution,
@@ -452,13 +723,18 @@ def get_multi_timeframe_history(
     limit=200
 ):
     """
-    Return analysis timeframes.
+    Return:
 
-    signal.py requires:
     5m
     15m
     1h
     1d
+    1w
+    1mo
+
+    Each timeframe is independent.
+    One failed timeframe does not destroy
+    the complete result.
     """
 
     timeframes = [
@@ -467,23 +743,38 @@ def get_multi_timeframe_history(
         "1h",
         "1d",
         "1w",
+        "1mo",
     ]
 
     result = {}
 
     for timeframe in timeframes:
 
-        result[timeframe] = get_candles(
-            symbol=symbol,
-            resolution=timeframe,
-            limit=limit
-        )
+        try:
+
+            result[timeframe] = get_candles(
+                symbol=symbol,
+                resolution=timeframe,
+                limit=limit
+            )
+
+        except Exception as exc:
+
+            print(
+                f"MTF error "
+                f"{symbol} {timeframe}: "
+                f"{exc}"
+            )
+
+            result[timeframe] = (
+                _empty_dataframe()
+            )
 
     return result
 
 
 # ==========================================================
-# TEST
+# CONNECTION TEST
 # ==========================================================
 
 if __name__ == "__main__":
@@ -493,7 +784,7 @@ if __name__ == "__main__":
     print("=" * 60)
 
     # ------------------------------------------------------
-    # BTC
+    # BTC ticker
     # ------------------------------------------------------
 
     btc = get_ticker("BTCUSD")
@@ -502,7 +793,7 @@ if __name__ == "__main__":
     print(btc)
 
     # ------------------------------------------------------
-    # ETH
+    # ETH ticker
     # ------------------------------------------------------
 
     eth = get_ticker("ETHUSD")
@@ -535,6 +826,24 @@ if __name__ == "__main__":
         print(
             "\nLAST CANDLE INDEX:",
             candles.index[-1]
+        )
+
+    # ------------------------------------------------------
+    # MTF TEST
+    # ------------------------------------------------------
+
+    print("\nMULTI TIMEFRAME TEST:")
+
+    mtf = get_multi_timeframe_history(
+        "BTCUSD",
+        20
+    )
+
+    for tf, data in mtf.items():
+
+        print(
+            f"{tf}: "
+            f"{len(data)} rows"
         )
 
     print("=" * 60)
