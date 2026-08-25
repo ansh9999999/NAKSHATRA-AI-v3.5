@@ -2,17 +2,14 @@
 NAKSHATRA AI v4.0
 Delta Exchange India - Market Data Helper
 
-This file provides:
-- Live ticker
-- Live price
-- Mark price
-- Volume
-- Candle history
-- Safe timestamp handling
+ROOT delta.py
 
-IMPORTANT:
-This is the ROOT delta.py.
-It is NOT broker/delta.py.
+Provides:
+- Live ticker
+- Current price
+- Candle history
+- Multi-timeframe history
+- Safe timestamp handling
 """
 
 import time
@@ -25,7 +22,6 @@ import pandas as pd
 # ==========================================================
 
 BASE_URL = "https://api.india.delta.exchange/v2"
-
 TIMEOUT = 15
 
 
@@ -42,7 +38,7 @@ session.headers.update({
 
 
 # ==========================================================
-# SAFE NUMBER
+# SAFE FLOAT
 # ==========================================================
 
 def _float(value, default=0.0):
@@ -58,7 +54,7 @@ def _float(value, default=0.0):
 
 def _timestamp_seconds(value):
     """
-    Convert Delta timestamp safely to seconds.
+    Convert Delta timestamp to Unix seconds.
 
     Supports:
     - seconds
@@ -67,17 +63,17 @@ def _timestamp_seconds(value):
     """
 
     try:
-        ts = int(value)
+        ts = int(float(value))
     except Exception:
         return None
 
-    # milliseconds
-    if ts > 10_000_000_000:
-        ts = ts // 1000
-
     # microseconds
-    if ts > 10_000_000_000:
-        ts = ts // 1000
+    if ts > 10_000_000_000_000:
+        ts //= 1_000_000
+
+    # milliseconds
+    elif ts > 10_000_000_000:
+        ts //= 1_000
 
     return ts
 
@@ -128,11 +124,9 @@ def get_ticker(symbol="BTCUSD"):
         }
 
     except Exception as exc:
-
         print(
             f"Delta ticker error [{symbol}]: {exc}"
         )
-
         return None
 
 
@@ -141,10 +135,6 @@ def get_ticker(symbol="BTCUSD"):
 # ==========================================================
 
 def get_current_price(symbol="BTCUSD"):
-    """
-    Return only current market price.
-    """
-
     ticker = get_ticker(symbol)
 
     if not ticker:
@@ -159,35 +149,22 @@ def get_current_price(symbol="BTCUSD"):
 
 
 # ==========================================================
-# CANDLE RESOLUTION
+# CANDLE RESOLUTIONS
 # ==========================================================
 
 RESOLUTION_SECONDS = {
-
     "1m": 60,
-
     "3m": 180,
-
     "5m": 300,
-
     "15m": 900,
-
     "30m": 1800,
-
     "1h": 3600,
-
     "2h": 7200,
-
     "4h": 14400,
-
     "6h": 21600,
-
     "12h": 43200,
-
     "1d": 86400,
-
     "1w": 604800,
-
 }
 
 
@@ -203,15 +180,15 @@ def get_candles(
     """
     Download historical candles.
 
-    Returns pandas DataFrame.
+    Returns DataFrame with:
 
-    Columns:
-        timestamp
-        open
-        high
-        low
-        close
-        volume
+    datetime
+    timestamp
+    open
+    high
+    low
+    close
+    volume
     """
 
     symbol = str(symbol).upper().strip()
@@ -230,8 +207,7 @@ def get_candles(
     candle_seconds = RESOLUTION_SECONDS[resolution]
 
     # ------------------------------------------------------
-    # IMPORTANT
-    # Delta history API expects start/end timestamps.
+    # START / END
     # ------------------------------------------------------
 
     now = int(time.time())
@@ -270,7 +246,6 @@ def get_candles(
                 f"Delta: no candles "
                 f"{symbol} {resolution}"
             )
-
             return pd.DataFrame()
 
         df = pd.DataFrame(rows)
@@ -328,8 +303,6 @@ def get_candles(
 
             else:
 
-                # Missing volume should not kill
-                # the complete candle dataset.
                 if column == "volume":
 
                     df[column] = 0.0
@@ -386,12 +359,31 @@ def get_candles(
         )
 
         # --------------------------------------------------
+        # IMPORTANT TIMESTAMP FIX
+        #
+        # signal.py uses:
+        #
+        # timestamp = entry_df.index[-1]
+        #
+        # Therefore DataFrame index MUST be datetime.
+        # --------------------------------------------------
+
+        df.set_index(
+            "datetime",
+            inplace=True
+        )
+
+        # Make sure index is sorted
+        df.sort_index(
+            inplace=True
+        )
+
+        # --------------------------------------------------
         # FINAL COLUMN ORDER
         # --------------------------------------------------
 
         columns = [
             "timestamp",
-            "datetime",
             "open",
             "high",
             "low",
@@ -410,7 +402,8 @@ def get_candles(
         print(
             f"Delta candles OK: "
             f"{symbol} {resolution} "
-            f"rows={len(df)}"
+            f"rows={len(df)} "
+            f"last={df.index[-1]}"
         )
 
         return df
@@ -435,7 +428,7 @@ def get_candles(
 
 
 # ==========================================================
-# ALIAS
+# HISTORY ALIAS
 # ==========================================================
 
 def get_history(
@@ -443,10 +436,6 @@ def get_history(
     resolution="5m",
     limit=200
 ):
-    """
-    Compatibility wrapper.
-    """
-
     return get_candles(
         symbol=symbol,
         resolution=resolution,
@@ -455,7 +444,7 @@ def get_history(
 
 
 # ==========================================================
-# MULTI TIMEFRAME
+# MULTI TIMEFRAME HISTORY
 # ==========================================================
 
 def get_multi_timeframe_history(
@@ -463,7 +452,13 @@ def get_multi_timeframe_history(
     limit=200
 ):
     """
-    Return all supported analysis timeframes.
+    Return analysis timeframes.
+
+    signal.py requires:
+    5m
+    15m
+    1h
+    1d
     """
 
     timeframes = [
@@ -498,7 +493,7 @@ if __name__ == "__main__":
     print("=" * 60)
 
     # ------------------------------------------------------
-    # BTC ticker
+    # BTC
     # ------------------------------------------------------
 
     btc = get_ticker("BTCUSD")
@@ -507,7 +502,7 @@ if __name__ == "__main__":
     print(btc)
 
     # ------------------------------------------------------
-    # ETH ticker
+    # ETH
     # ------------------------------------------------------
 
     eth = get_ticker("ETHUSD")
@@ -516,7 +511,7 @@ if __name__ == "__main__":
     print(eth)
 
     # ------------------------------------------------------
-    # BTC candles
+    # BTC 5M
     # ------------------------------------------------------
 
     candles = get_candles(
@@ -534,9 +529,12 @@ if __name__ == "__main__":
     else:
 
         print(
-            candles.tail(5).to_string(
-                index=False
-            )
+            candles.tail(5).to_string()
+        )
+
+        print(
+            "\nLAST CANDLE INDEX:",
+            candles.index[-1]
         )
 
     print("=" * 60)
