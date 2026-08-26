@@ -21,8 +21,32 @@
   <div class="symbols">
     <button class="symbol active" data-symbol="BTCUSD">BTCUSD</button>
     <button class="symbol" data-symbol="ETHUSD">ETHUSD</button>
+    <button class="symbol validation-btn" id="validationToggle">🧪 Backtest</button>
   </div>
 </header>
+
+<section class="card validation-card" id="validationPanel" hidden>
+  <h2>🧪 Backtest & Validation</h2>
+  <div class="validation-form">
+    <label>Historical 5m CSV<input id="backtestFile" type="file" accept=".csv,text/csv"></label>
+    <div class="validation-row">
+      <label>Symbol<select id="backtestSymbol"><option>BTCUSD</option><option>ETHUSD</option></select></label>
+      <label>Horizon<select id="backtestHorizon"><option value="3">15m</option><option value="6">30m</option><option value="12">60m</option></select></label>
+    </div>
+    <button id="runBacktest" class="run-btn">▶ Run Validation</button>
+  </div>
+  <div id="backtestStatus" class="muted">Upload OHLCV CSV: timestamp, open, high, low, close, volume.</div>
+  <div id="backtestResults" hidden>
+    <div class="grid3 validation-metrics">
+      <div class="mini"><b>Trades</b><strong id="btTrades">—</strong></div>
+      <div class="mini"><b>Win Rate</b><strong id="btWinRate">—</strong></div>
+      <div class="mini"><b>Avg Return</b><strong id="btAvgReturn">—</strong></div>
+    </div>
+    <div class="chart-card"><h3>Validation Equity Curve</h3><canvas id="backtestChart"></canvas></div>
+    <div class="table-wrap"><table><thead><tr><th>Horizon</th><th>Trades</th><th>Wins</th><th>Losses</th><th>Win Rate</th><th>Avg Return</th></tr></thead><tbody id="backtestTable"></tbody></table></div>
+    <p class="muted" id="backtestNote"></p>
+  </div>
+</section>
 
 <section class="card market">
   <h2>💰 Live Market</h2>
