@@ -19,8 +19,13 @@ from config import DELTA_BASE_URL
 from logger import logger
 
 RESOLUTIONS = ("5m", "15m", "1h", "1d", "1w", "1mo")
-TIMEOUT_SECONDS = 8
-RETRIES = 1
+TIMEOUT_SECONDS = 12
+RETRIES = 3
+
+_HTTP_HEADERS = {
+    "User-Agent": "NAKSHATRA-AI/4.0",
+    "Accept": "application/json",
+}
 DEFAULT_LIMIT = 200
 
 # Small in-process cache prevents dashboard + scanner from hammering Delta.
@@ -82,11 +87,21 @@ def _fetch_history(symbol, resolution="5m", limit=200):
 
     for attempt in range(RETRIES + 1):
         try:
-            response = requests.get(url, params=params, timeout=TIMEOUT_SECONDS)
+            response = requests.get(
+                url,
+                params=params,
+                headers=_HTTP_HEADERS,
+                timeout=TIMEOUT_SECONDS,
+            )
             response.raise_for_status()
 
             payload = response.json()
             rows = payload.get("result") or []
+            if isinstance(rows, dict):
+                for key in ("candles", "data", "rows", "result"):
+                    if isinstance(rows.get(key), list):
+                        rows = rows[key]
+                        break
             if not isinstance(rows, list):
                 raise ValueError(
                     f"Unexpected Delta candle response for {symbol.upper()} {resolution}"
@@ -130,7 +145,7 @@ def _fetch_history(symbol, resolution="5m", limit=200):
         except Exception as exc:
             last_error = exc
             if attempt < RETRIES:
-                time.sleep(0.25)
+                time.sleep(0.5 * (attempt + 1))
 
     logger.warning(
         "HISTORY FAILED %s %s: %s",
