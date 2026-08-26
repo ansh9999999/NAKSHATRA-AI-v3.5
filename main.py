@@ -172,19 +172,60 @@ def api_live(symbol: str = "BTCUSD", force: bool = False):
     analysis = run_analysis(symbol, force=force)
 
     ticker = None
+    ticker_error = None
     try:
         ticker = get_ticker(symbol)
     except Exception as exc:
+        ticker_error = str(exc)
         logger.warning("Ticker failed %s: %s", symbol, exc)
+
+    # If ticker is unavailable but the signal engine has a valid close, use
+    # that same-market price instead of rendering a blank price.
+    if ticker is None and isinstance(analysis, dict):
+        try:
+            analysis_price = float(analysis.get("price"))
+        except (TypeError, ValueError):
+            analysis_price = None
+        if analysis_price is not None and analysis_price > 0:
+            ticker = {
+                "symbol": symbol,
+                "price": analysis_price,
+                "close": analysis_price,
+                "mark_price": analysis_price,
+                "spot_price": 0.0,
+                "volume": 0.0,
+                "source": "analysis_5m_close",
+            }
 
     return _json_safe({
         "status": analysis.get("status", "UNKNOWN")
             if isinstance(analysis, dict) else "UNKNOWN",
         "symbol": symbol,
         "ticker": ticker,
+        "ticker_error": ticker_error,
         "analysis": analysis,
         "server_time": time.time(),
     })
+
+
+@app.get("/api/diagnostics")
+def diagnostics(symbol: str = "BTCUSD"):
+    symbol = symbol.upper()
+    out = {"symbol": symbol, "ticker": None, "ticker_error": None, "timeframes": {}}
+    try:
+        out["ticker"] = get_ticker(symbol)
+    except Exception as exc:
+        out["ticker_error"] = str(exc)
+    data = get_multi_timeframe_history(symbol, limit=20)
+    for tf, df in data.items():
+        out["timeframes"][tf] = {
+            "rows": int(len(df)),
+            "last_close": (
+                float(df["close"].iloc[-1])
+                if not df.empty and "close" in df.columns else None
+            ),
+        }
+    return _json_safe(out)
 
 
 @app.get("/api/debug-data")
