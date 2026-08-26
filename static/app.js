@@ -228,3 +228,126 @@ async function refreshAll() {
 
 refreshAll();
 setInterval(refreshAll, 10000);
+
+
+// ------------------------------------------------------------
+// Historical Backtest / Validation
+// ------------------------------------------------------------
+const validationToggle = $("validationToggle");
+const validationPanel = $("validationPanel");
+const runBacktestBtn = $("runBacktest");
+
+if (validationToggle && validationPanel) {
+  validationToggle.addEventListener("click", () => {
+    validationPanel.hidden = !validationPanel.hidden;
+    if (!validationPanel.hidden) {
+      validationPanel.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  });
+}
+
+function drawValidationEquity(points) {
+  const canvas = $("backtestChart");
+  if (!canvas) return;
+  const ctx = canvas.getContext("2d");
+  const dpr = window.devicePixelRatio || 1;
+  const w = canvas.clientWidth || 320;
+  const h = 190;
+  canvas.width = w * dpr;
+  canvas.height = h * dpr;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+
+  if (!points || !points.length) {
+    ctx.fillText("No validation trades", 12, 28);
+    return;
+  }
+
+  const values = points.map(p => Number(p.value) || 0);
+  const min = Math.min(...values, 0);
+  const max = Math.max(...values, 0);
+  const range = max - min || 1;
+  const pad = 18;
+
+  ctx.beginPath();
+  values.forEach((v, i) => {
+    const x = pad + i * ((w - pad * 2) / Math.max(values.length - 1, 1));
+    const y = h - pad - ((v - min) / range) * (h - pad * 2);
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  });
+  ctx.stroke();
+}
+
+function renderBacktest(data) {
+  const rows = Array.isArray(data.summary) ? data.summary : [];
+  const first = rows[0] || {};
+
+  text("btTrades", first.trades ?? "0");
+  text("btWinRate", first.win_rate_pct !== undefined ? `${first.win_rate_pct}%` : "—");
+  text("btAvgReturn", first.avg_return_pct !== undefined ? `${first.avg_return_pct}%` : "—");
+
+  $("backtestTable").innerHTML = rows.length
+    ? rows.map(r => `<tr>
+        <td>${escapeHtml(String(r.horizon * 5))}m</td>
+        <td>${escapeHtml(String(r.trades))}</td>
+        <td>${escapeHtml(String(r.wins))}</td>
+        <td>${escapeHtml(String(r.losses))}</td>
+        <td>${escapeHtml(String(r.win_rate_pct))}%</td>
+        <td>${escapeHtml(String(r.avg_return_pct))}%</td>
+      </tr>`).join("")
+    : `<tr><td colspan="6">No BUY/SELL validation signals found</td></tr>`;
+
+  $("backtestNote").textContent = data.note || "";
+  $("backtestResults").hidden = false;
+  drawValidationEquity(data.equity_curve || []);
+}
+
+if (runBacktestBtn) {
+  runBacktestBtn.addEventListener("click", async () => {
+    const fileInput = $("backtestFile");
+    const status = $("backtestStatus");
+    const file = fileInput?.files?.[0];
+
+    if (!file) {
+      status.textContent = "Please select a historical 5m CSV first.";
+      return;
+    }
+
+    const form = new FormData();
+    form.append("file", file);
+    form.append("symbol", $("backtestSymbol")?.value || "BTCUSD");
+
+    const horizon = $("backtestHorizon")?.value || "3";
+    // Keep the selected horizon as the primary metric and also test
+    // the standard 30m/60m horizons for comparison.
+    const horizons = [...new Set([Number(horizon), 6, 12])];
+    form.append("horizons", horizons.join(","));
+
+    runBacktestBtn.disabled = true;
+    status.textContent = "Running validation… this can take a little while.";
+    $("backtestResults").hidden = true;
+
+    try {
+      const response = await fetch("/api/backtest", {
+        method: "POST",
+        body: form,
+        cache: "no-store",
+      });
+      const data = await response.json();
+
+      if (!response.ok || data.status !== "OK") {
+        throw new Error(data.message || `HTTP ${response.status}`);
+      }
+
+      status.textContent = `Validation complete • ${data.rows} evaluated rows`;
+      renderBacktest(data);
+    } catch (err) {
+      console.error(err);
+      status.textContent = `Validation error: ${err.message}`;
+      $("backtestResults").hidden = true;
+    } finally {
+      runBacktestBtn.disabled = false;
+    }
+  });
+}
