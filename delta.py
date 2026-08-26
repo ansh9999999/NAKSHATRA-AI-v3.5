@@ -377,247 +377,123 @@ def _get_all_tickers():
 
 def get_ticker(symbol="BTCUSD"):
     """
-    Get exact live ticker from Delta Exchange India.
+    Get an exact live ticker from Delta Exchange India.
 
-    IMPORTANT:
-    The requested symbol MUST match the symbol returned
-    by Delta. This prevents BTCUSD / ETHUSD cross-mapping.
+    Fallback order:
+      1. GET /v2/tickers/{symbol}
+      2. GET /v2/tickers?symbol={symbol}
+      3. GET /v2/history/candles using the latest close
+
+    The fallback candle is only used for displaying/continuing analysis when
+    the public ticker endpoint is temporarily unavailable. It is never used
+    to map one symbol to another.
     """
-
     requested_symbol = _validate_symbol(symbol)
 
-    # ------------------------------------------------------
-    # METHOD 1
-    # Exact /tickers/{symbol}
-    # ------------------------------------------------------
-
-    try:
-
-        url = f"{TICKER_URL}/{requested_symbol}"
-
-        payload = _get_json(url)
-
-        result = _extract_ticker_result(
-            payload,
-            requested_symbol
-        )
-
-        if result:
-
-            returned_symbol = _normalize_symbol(
-                result.get("symbol")
-            )
-
-            # HARD SAFETY CHECK
-            if returned_symbol != requested_symbol:
-
-                print(
-                    "Delta ticker symbol mismatch: "
-                    f"requested={requested_symbol}, "
-                    f"returned={returned_symbol}"
-                )
-
-            else:
-
-                price = (
-                    result.get("close")
-                    if result.get("close") is not None
-                    else result.get("mark_price")
-                )
-
-                if price is None:
-                    price = result.get("spot_price")
-
-                price = _float(price, None)
-
-                if price is not None and price > 0:
-
-                    return {
-                        "symbol": returned_symbol,
-
-                        "price": price,
-
-                        "close": price,
-
-                        "mark_price": _float(
-                            result.get(
-                                "mark_price"
-                            ),
-                            price
-                        ),
-
-                        "spot_price": _float(
-                            result.get(
-                                "spot_price"
-                            ),
-                            0.0
-                        ),
-
-                        "volume": _float(
-                            result.get(
-                                "volume"
-                            ),
-                            0.0
-                        ),
-
-                        "open": _float(
-                            result.get(
-                                "open"
-                            ),
-                            0.0
-                        ),
-
-                        "high": _float(
-                            result.get(
-                                "high"
-                            ),
-                            0.0
-                        ),
-
-                        "low": _float(
-                            result.get(
-                                "low"
-                            ),
-                            0.0
-                        ),
-
-                        "source": "delta_exact",
-                    }
-
-    except Exception as exc:
-
-        print(
-            f"Delta exact ticker failed "
-            f"[{requested_symbol}]: {exc}"
-        )
-
-
-    # ------------------------------------------------------
-    # METHOD 2
-    # Bulk /tickers fallback
-    #
-    # This is the important protection against a wrong
-    # symbol response.
-    # ------------------------------------------------------
-
-    try:
-
-        tickers = _get_all_tickers()
-
-        exact = None
-
-        for item in tickers:
-
-            if not isinstance(item, dict):
-                continue
-
-            item_symbol = _normalize_symbol(
-                item.get("symbol")
-            )
-
-            if item_symbol == requested_symbol:
-
-                exact = item
-                break
-
-        if exact is None:
-
-            print(
-                f"Delta bulk ticker: "
-                f"{requested_symbol} not found"
-            )
-
+    def _build_ticker(result, source):
+        if not isinstance(result, dict):
             return None
 
-        returned_symbol = _normalize_symbol(
-            exact.get("symbol")
-        )
-
-        # HARD SAFETY CHECK
-        if returned_symbol != requested_symbol:
-
+        returned_symbol = _normalize_symbol(result.get("symbol"))
+        # The path/query itself is symbol-specific. If Delta omits symbol in
+        # the payload, keep the requested symbol rather than rejecting valid
+        # ticker data. If a different symbol is explicitly returned, reject it.
+        if returned_symbol and returned_symbol != requested_symbol:
             print(
-                "Delta bulk ticker mismatch: "
-                f"requested={requested_symbol}, "
-                f"returned={returned_symbol}"
+                "Delta ticker symbol mismatch: "
+                f"requested={requested_symbol}, returned={returned_symbol}"
             )
-
             return None
 
-        price = exact.get("close")
-
+        price = result.get("close")
         if price is None:
-            price = exact.get("mark_price")
-
+            price = result.get("mark_price")
         if price is None:
-            price = exact.get("spot_price")
+            price = result.get("spot_price")
 
         price = _float(price, None)
-
         if price is None or price <= 0:
             return None
 
         return {
-            "symbol": returned_symbol,
-
+            "symbol": requested_symbol,
             "price": price,
-
             "close": price,
-
-            "mark_price": _float(
-                exact.get(
-                    "mark_price"
-                ),
-                price
-            ),
-
-            "spot_price": _float(
-                exact.get(
-                    "spot_price"
-                ),
-                0.0
-            ),
-
-            "volume": _float(
-                exact.get(
-                    "volume"
-                ),
-                0.0
-            ),
-
-            "open": _float(
-                exact.get(
-                    "open"
-                ),
-                0.0
-            ),
-
-            "high": _float(
-                exact.get(
-                    "high"
-                ),
-                0.0
-            ),
-
-            "low": _float(
-                exact.get(
-                    "low"
-                ),
-                0.0
-            ),
-
-            "source": "delta_bulk",
+            "mark_price": _float(result.get("mark_price"), price),
+            "spot_price": _float(result.get("spot_price"), 0.0),
+            "volume": _float(result.get("volume"), 0.0),
+            "open": _float(result.get("open"), 0.0),
+            "high": _float(result.get("high"), 0.0),
+            "low": _float(result.get("low"), 0.0),
+            "source": source,
         }
 
+    # 1) Exact product endpoint
+    try:
+        payload = _get_json(f"{TICKER_URL}/{requested_symbol}")
+        result = _extract_ticker_result(payload, requested_symbol)
+        ticker = _build_ticker(result, "delta_exact")
+        if ticker:
+            return ticker
     except Exception as exc:
+        print(f"Delta exact ticker failed [{requested_symbol}]: {exc}")
 
-        print(
-            f"Delta bulk ticker failed "
-            f"[{requested_symbol}]: {exc}"
+    # 2) Bulk endpoint with a symbol filter. This is useful if the
+    # symbol-specific endpoint is temporarily degraded.
+    try:
+        payload = _get_json(
+            TICKER_URL,
+            params={"symbol": requested_symbol},
         )
+        result = _extract_ticker_result(payload, requested_symbol)
+        ticker = _build_ticker(result, "delta_filtered")
+        if ticker:
+            return ticker
+    except Exception as exc:
+        print(f"Delta filtered ticker failed [{requested_symbol}]: {exc}")
 
-        return None
+    # 3) Full bulk ticker fallback, exact symbol only.
+    try:
+        tickers = _get_all_tickers()
+        for item in tickers:
+            if not isinstance(item, dict):
+                continue
+            if _normalize_symbol(item.get("symbol")) != requested_symbol:
+                continue
+            ticker = _build_ticker(item, "delta_bulk")
+            if ticker:
+                return ticker
+    except Exception as exc:
+        print(f"Delta bulk ticker failed [{requested_symbol}]: {exc}")
 
+    # 4) Last-resort public market-data fallback. This prevents the dashboard
+    # from showing "Price unavailable" when only /tickers is degraded.
+    try:
+        candles = get_candles(
+            symbol=requested_symbol,
+            resolution="5m",
+            limit=2,
+        )
+        if not candles.empty:
+            last = candles.iloc[-1]
+            price = _float(last.get("close"), None)
+            if price is not None and price > 0:
+                return {
+                    "symbol": requested_symbol,
+                    "price": price,
+                    "close": price,
+                    "mark_price": price,
+                    "spot_price": 0.0,
+                    "volume": _float(last.get("volume"), 0.0),
+                    "open": _float(last.get("open"), 0.0),
+                    "high": _float(last.get("high"), 0.0),
+                    "low": _float(last.get("low"), 0.0),
+                    "source": "delta_candle_fallback",
+                }
+    except Exception as exc:
+        print(f"Delta candle price fallback failed [{requested_symbol}]: {exc}")
+
+    return None
 
 # ==========================================================
 # CURRENT PRICE
