@@ -47,32 +47,41 @@ def generate_signal(data):
     # Technical Score
     # ---------------------------------
 
-    technical_score = (
+    technical_raw_score = (
         trend_result["total_score"]
         + momentum_result["score"]
         + smart_money_result["score"]
     )
 
-    technical_score = max(0, min(100, abs(technical_score)))
+    # IMPORTANT:
+    # Keep the original direction.
+    # Do NOT use abs() before deciding BUY/SELL.
+
+    technical_confidence = min(
+        100,
+        abs(technical_raw_score)
+    )
 
     # ---------------------------------
     # Technical Signal
     # ---------------------------------
 
-    if technical_score >= 85:
+    if technical_raw_score >= 85:
         technical_signal = "BUY"
 
-    elif technical_score <= 25:
+    elif technical_raw_score <= -85:
         technical_signal = "SELL"
 
     else:
         technical_signal = "NEUTRAL"
 
     technical_result = {
-
         "signal": technical_signal,
 
-        "confidence": technical_score,
+        "confidence": technical_confidence,
+
+        # Keep raw score available for dashboard/debugging
+        "raw_score": technical_raw_score,
 
         "trend": trend_result,
 
@@ -92,11 +101,18 @@ def generate_signal(data):
 
     timestamp = entry_df.index[-1]
 
-    # Delta candle timestamps are Unix integers. Convert them to a real
-    # Python datetime before astrology/numerology modules use .day, .month, etc.
+    # Delta candle timestamps are Unix integers.
+    # Convert them to a real Python datetime before
+    # astrology/numerology modules use .day, .month, etc.
+
     if isinstance(timestamp, (int, float)):
         import datetime as _dt
-        timestamp = _dt.datetime.fromtimestamp(float(timestamp), tz=_dt.timezone.utc)
+
+        timestamp = _dt.datetime.fromtimestamp(
+            float(timestamp),
+            tz=_dt.timezone.utc
+        )
+
     elif hasattr(timestamp, "to_pydatetime"):
         timestamp = timestamp.to_pydatetime()
 
@@ -122,13 +138,9 @@ def generate_signal(data):
     # ---------------------------------
 
     result = calculate_decision(
-
         technical_result,
-
         astrology_result,
-
         numerology_result
-
     )
 
     # ---------------------------------
