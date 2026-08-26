@@ -37,9 +37,11 @@ BASE_URL = os.getenv(
 if BASE_URL.endswith("/v2"):
     TICKER_URL = f"{BASE_URL}/tickers"
     CANDLE_URL = f"{BASE_URL}/history/candles"
+    SPARKLINE_URL = f"{BASE_URL}/history/sparklines"
 else:
     TICKER_URL = f"{BASE_URL}/v2/tickers"
     CANDLE_URL = f"{BASE_URL}/v2/history/candles"
+    SPARKLINE_URL = f"{BASE_URL}/v2/history/sparklines"
 
 TIMEOUT = 15
 RETRIES = 3
@@ -492,6 +494,34 @@ def get_ticker(symbol="BTCUSD"):
                 }
     except Exception as exc:
         print(f"Delta candle price fallback failed [{requested_symbol}]: {exc}")
+
+    # 5) Sparkline fallback: lightweight public market-data endpoint.
+    try:
+        payload = _get_json(
+            SPARKLINE_URL,
+            params={"symbols": requested_symbol},
+        )
+        result = payload.get("result") if isinstance(payload, dict) else None
+        series = result.get(requested_symbol) if isinstance(result, dict) else None
+        if isinstance(series, list) and series:
+            point = series[-1]
+            if isinstance(point, (list, tuple)) and len(point) >= 2:
+                price = _float(point[1], None)
+                if price is not None and price > 0:
+                    return {
+                        "symbol": requested_symbol,
+                        "price": price,
+                        "close": price,
+                        "mark_price": price,
+                        "spot_price": 0.0,
+                        "volume": 0.0,
+                        "open": 0.0,
+                        "high": 0.0,
+                        "low": 0.0,
+                        "source": "delta_sparkline_fallback",
+                    }
+    except Exception as exc:
+        print(f"Delta sparkline fallback failed [{requested_symbol}]: {exc}")
 
     return None
 
