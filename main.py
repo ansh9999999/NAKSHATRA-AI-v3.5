@@ -14,8 +14,10 @@ The trading/analysis engine is not changed. This file:
 from contextlib import asynccontextmanager
 import time
 import math
+import os
+import tempfile
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, File, UploadFile, Form
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -28,6 +30,7 @@ from history import get_multi_timeframe_history
 from analysis.signal import generate_signal
 from scanner import market_scan
 from delta import get_ticker
+from validation.backtest import run_backtest
 
 CACHE_TTL = 8
 _analysis_cache = {}
@@ -204,6 +207,92 @@ def debug_data(symbol: str = "BTCUSD"):
             for tf, df in data.items()
         },
     }
+
+
+
+@app.post("/api/backtest")
+async def api_backtest(
+    file: UploadFile = File(...),
+    symbol: str = Form("BTCUSD"),
+    horizons: str = Form("3,6,12"),
+):
+    """Run the browser-uploaded historical validation without placing trades."""
+    symbol = symbol.upper().strip()
+    if symbol not in {"BTCUSD", "ETHUSD"}:
+        return {"status": "ERROR", "message": "Unsupported symbol"}
+
+    if not file.filename or not file.filename.lower().endswith(".csv"):
+        return {"status": "ERROR", "message": "Please upload a CSV file."}
+
+    try:
+        parsed_horizons = tuple(
+            int(x.strip()) for x in horizons.split(",") if x.strip()
+        )
+        if not parsed_horizons or any(x <= 0 for x in parsed_horizons):
+            raise ValueError
+    except Exception:
+        return {"status": "ERROR", "message": "Invalid horizons."}
+
+    raw = await file.read()
+    if not raw:
+        return {"status": "ERROR", "message": "Uploaded CSV is empty."}
+
+    temp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            suffix=".csv", delete=False
+        ) as tmp:
+            tmp.write(raw)
+            temp_path = tmp.name
+
+        results, summary, confidence = run_backtest(
+            temp_path,
+            symbol=symbol,
+            horizons=parsed_horizons,
+            step=1,
+            min_history=250,
+        )
+
+        # Build a simple cumulative validation curve for the first horizon.
+        primary = parsed_horizons[0]
+        curve_df = results[
+            (results["horizon"] == primary)
+            & results["signal"].isin(["BUY", "SELL"])
+        ].copy()
+        curve = []
+        cumulative = 0.0
+        for _, row in curve_df.iterrows():
+            cumulative += float(row["signal_return_pct"])
+            curve.append({
+                "timestamp": str(row["timestamp"]),
+                "value": round(cumulative, 4),
+            })
+
+        return _json_safe({
+            "status": "OK",
+            "symbol": symbol,
+            "rows": int(len(results)),
+            "summary": summary.to_dict(orient="records"),
+            "confidence": confidence.to_dict(orient="records"),
+            "equity_curve": curve[-500:],
+            "note": (
+                "Validation is forward-return based: BUY/SELL signals are "
+                "scored against future close returns. No live orders are placed."
+            ),
+        })
+
+    except Exception as exc:
+        logger.exception("Backtest validation failed")
+        return {
+            "status": "ERROR",
+            "message": str(exc),
+        }
+    finally:
+        if temp_path:
+            try:
+                os.unlink(temp_path)
+            except OSError:
+                pass
 
 
 @app.get("/stats")
