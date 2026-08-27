@@ -16,8 +16,15 @@ RESOLUTION_SECONDS = {"1m":60,"3m":180,"5m":300,"15m":900,"30m":1800,"1h":3600,"
 def _empty():
     df=pd.DataFrame(columns=["open","high","low","close","volume"]); df.index=pd.DatetimeIndex([],name="timestamp"); return df
 
+def _canonical_symbol(symbol):
+    s=str(symbol or "").strip().upper()
+    if s in ("", "UNDEFINED", "NULL", "NONE", "NAN"):
+        return "BTCUSD"
+    aliases={"BTC":"BTCUSD","BTC/USDT":"BTCUSD","BTC-USDT":"BTCUSD","ETH":"ETHUSD","ETH/USDT":"ETHUSD","ETH-USDT":"ETHUSD"}
+    return aliases.get(s,s)
+
 def _fetch_history(symbol,resolution="5m",limit=200):
-    symbol=str(symbol).upper().strip(); resolution=str(resolution).lower().strip(); seconds=RESOLUTION_SECONDS.get(resolution,300)
+    symbol=_canonical_symbol(symbol); resolution=str(resolution).lower().strip(); seconds=RESOLUTION_SECONDS.get(resolution,300)
     if resolution not in RESOLUTION_SECONDS: resolution="5m"
     try: limit=max(10,min(int(limit),2000))
     except Exception: limit=200
@@ -48,7 +55,8 @@ def _fetch_history(symbol,resolution="5m",limit=200):
         if attempt<RETRIES: time.sleep(1)
     return _empty()
 
-def get_history(symbol,resolution="5m",limit=200): return _fetch_history(symbol,resolution,limit)
+def get_history(symbol="BTCUSD",resolution="5m",limit=200): return _fetch_history(symbol,resolution,limit)
 
-def get_multi_timeframe_history(symbol,limit=200):
+def get_multi_timeframe_history(symbol="BTCUSD",limit=200):
+    symbol=_canonical_symbol(symbol)
     return {"symbol":symbol,"5m":_fetch_history(symbol,"5m",limit),"15m":_fetch_history(symbol,"15m",limit),"1h":_fetch_history(symbol,"1h",limit),"1d":_fetch_history(symbol,"1d",limit)}
