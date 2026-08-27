@@ -15,7 +15,7 @@ from contextlib import asynccontextmanager
 import time
 import math
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -31,6 +31,21 @@ from delta import get_ticker
 
 CACHE_TTL = 8
 _analysis_cache = {}
+
+
+def canonical_symbol(value, default="BTCUSD"):
+    """Normalize dashboard/API symbols and prevent JavaScript undefined leakage."""
+    s = str(value or "").strip().upper()
+    if s in ("", "UNDEFINED", "NULL", "NONE", "NAN"):
+        return default
+    aliases = {
+        "BTC": "BTCUSD", "BTC/USDT": "BTCUSD", "BTC-USDT": "BTCUSD",
+        "ETH": "ETHUSD", "ETH/USDT": "ETHUSD", "ETH-USDT": "ETHUSD",
+    }
+    s = aliases.get(s, s)
+    if s not in ("BTCUSD", "ETHUSD"):
+        raise HTTPException(status_code=400, detail=f"Unsupported symbol: {s}")
+    return s
 
 
 def _json_safe(value):
@@ -62,7 +77,7 @@ def _json_safe(value):
 
 
 def run_analysis(symbol: str, force=False):
-    symbol = symbol.upper()
+    symbol = canonical_symbol(symbol)
     now = time.time()
 
     if not force:
@@ -165,7 +180,7 @@ def api():
 
 @app.get("/api/live")
 def api_live(symbol: str = "BTCUSD", force: bool = False):
-    symbol = symbol.upper()
+    symbol = canonical_symbol(symbol)
     analysis = run_analysis(symbol, force=force)
 
     ticker = None
@@ -197,7 +212,7 @@ def api_live(symbol: str = "BTCUSD", force: bool = False):
 
 @app.get("/api/debug-data")
 def debug_data(symbol: str = "BTCUSD"):
-    symbol = symbol.upper()
+    symbol = canonical_symbol(symbol)
     data = get_multi_timeframe_history(symbol, limit=20)
 
     return {
@@ -219,7 +234,7 @@ def debug_data(symbol: str = "BTCUSD"):
 
 @app.get("/api/diagnostics")
 def diagnostics(symbol: str = "BTCUSD"):
-    symbol = symbol.upper()
+    symbol = canonical_symbol(symbol)
     result = {"symbol": symbol}
     try:
         result["ticker"] = get_ticker(symbol)
