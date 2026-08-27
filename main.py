@@ -14,10 +14,8 @@ The trading/analysis engine is not changed. This file:
 from contextlib import asynccontextmanager
 import time
 import math
-import os
-import tempfile
 
-from fastapi import FastAPI, Request, File, UploadFile, Form
+from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -30,7 +28,6 @@ from history import get_multi_timeframe_history
 from analysis.signal import generate_signal
 from scanner import market_scan
 from delta import get_ticker
-from validation.backtest import run_backtest
 
 CACHE_TTL = 8
 _analysis_cache = {}
@@ -172,60 +169,30 @@ def api_live(symbol: str = "BTCUSD", force: bool = False):
     analysis = run_analysis(symbol, force=force)
 
     ticker = None
-    ticker_error = None
     try:
         ticker = get_ticker(symbol)
     except Exception as exc:
-        ticker_error = str(exc)
         logger.warning("Ticker failed %s: %s", symbol, exc)
 
-    # If ticker is unavailable but the signal engine has a valid close, use
-    # that same-market price instead of rendering a blank price.
+    # If the ticker endpoint is temporarily unavailable, use the latest
+    # candle price already used by the signal engine. Mark it clearly as
+    # a candle fallback; this is not a fabricated tick.
     if ticker is None and isinstance(analysis, dict):
         try:
-            analysis_price = float(analysis.get("price"))
-        except (TypeError, ValueError):
-            analysis_price = None
-        if analysis_price is not None and analysis_price > 0:
-            ticker = {
-                "symbol": symbol,
-                "price": analysis_price,
-                "close": analysis_price,
-                "mark_price": analysis_price,
-                "spot_price": 0.0,
-                "volume": 0.0,
-                "source": "analysis_5m_close",
-            }
+            fallback_price = float(analysis.get("price"))
+        except Exception:
+            fallback_price = None
+        if fallback_price is not None and fallback_price > 0:
+            ticker = {"symbol":symbol,"price":fallback_price,"close":fallback_price,"mark_price":fallback_price,"volume":0.0,"source":"analysis_5m_close_fallback"}
 
     return _json_safe({
         "status": analysis.get("status", "UNKNOWN")
             if isinstance(analysis, dict) else "UNKNOWN",
         "symbol": symbol,
         "ticker": ticker,
-        "ticker_error": ticker_error,
         "analysis": analysis,
         "server_time": time.time(),
     })
-
-
-@app.get("/api/diagnostics")
-def diagnostics(symbol: str = "BTCUSD"):
-    symbol = symbol.upper()
-    out = {"symbol": symbol, "ticker": None, "ticker_error": None, "timeframes": {}}
-    try:
-        out["ticker"] = get_ticker(symbol)
-    except Exception as exc:
-        out["ticker_error"] = str(exc)
-    data = get_multi_timeframe_history(symbol, limit=20)
-    for tf, df in data.items():
-        out["timeframes"][tf] = {
-            "rows": int(len(df)),
-            "last_close": (
-                float(df["close"].iloc[-1])
-                if not df.empty and "close" in df.columns else None
-            ),
-        }
-    return _json_safe(out)
 
 
 @app.get("/api/debug-data")
@@ -250,90 +217,21 @@ def debug_data(symbol: str = "BTCUSD"):
     }
 
 
-
-@app.post("/api/backtest")
-async def api_backtest(
-    file: UploadFile = File(...),
-    symbol: str = Form("BTCUSD"),
-    horizons: str = Form("3,6,12"),
-):
-    """Run the browser-uploaded historical validation without placing trades."""
-    symbol = symbol.upper().strip()
-    if symbol not in {"BTCUSD", "ETHUSD"}:
-        return {"status": "ERROR", "message": "Unsupported symbol"}
-
-    if not file.filename or not file.filename.lower().endswith(".csv"):
-        return {"status": "ERROR", "message": "Please upload a CSV file."}
-
+@app.get("/api/diagnostics")
+def diagnostics(symbol: str = "BTCUSD"):
+    symbol = symbol.upper()
+    result = {"symbol": symbol}
     try:
-        parsed_horizons = tuple(
-            int(x.strip()) for x in horizons.split(",") if x.strip()
-        )
-        if not parsed_horizons or any(x <= 0 for x in parsed_horizons):
-            raise ValueError
-    except Exception:
-        return {"status": "ERROR", "message": "Invalid horizons."}
-
-    raw = await file.read()
-    if not raw:
-        return {"status": "ERROR", "message": "Uploaded CSV is empty."}
-
-    temp_path = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            suffix=".csv", delete=False
-        ) as tmp:
-            tmp.write(raw)
-            temp_path = tmp.name
-
-        results, summary, confidence = run_backtest(
-            temp_path,
-            symbol=symbol,
-            horizons=parsed_horizons,
-            step=1,
-            min_history=250,
-        )
-
-        # Build a simple cumulative validation curve for the first horizon.
-        primary = parsed_horizons[0]
-        curve_df = results[
-            (results["horizon"] == primary)
-            & results["signal"].isin(["BUY", "SELL"])
-        ].copy()
-        curve = []
-        cumulative = 0.0
-        for _, row in curve_df.iterrows():
-            cumulative += float(row["signal_return_pct"])
-            curve.append({
-                "timestamp": str(row["timestamp"]),
-                "value": round(cumulative, 4),
-            })
-
-        return _json_safe({
-            "status": "OK",
-            "symbol": symbol,
-            "rows": int(len(results)),
-            "summary": summary.to_dict(orient="records"),
-            "confidence": confidence.to_dict(orient="records"),
-            "equity_curve": curve[-500:],
-            "note": (
-                "Validation is forward-return based: BUY/SELL signals are "
-                "scored against future close returns. No live orders are placed."
-            ),
-        })
-
+        result["ticker"] = get_ticker(symbol)
     except Exception as exc:
-        logger.exception("Backtest validation failed")
-        return {
-            "status": "ERROR",
-            "message": str(exc),
-        }
-    finally:
-        if temp_path:
-            try:
-                os.unlink(temp_path)
-            except OSError:
-                pass
+        result["ticker"] = None
+        result["ticker_error"] = str(exc)
+    try:
+        data = get_multi_timeframe_history(symbol, limit=5)
+        result["history"] = {tf:{"rows":int(len(df)),"last_close":float(df["close"].iloc[-1]) if not df.empty and "close" in df.columns else None} for tf,df in data.items()}
+    except Exception as exc:
+        result["history_error"] = str(exc)
+    return _json_safe(result)
 
 
 @app.get("/stats")
