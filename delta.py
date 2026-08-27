@@ -103,6 +103,12 @@ def _int(value, default=None):
 def _normalize_symbol(symbol):
     symbol = str(symbol or "").upper().strip()
 
+    # Browser/API clients can leak a JavaScript undefined token.
+    # Treat it as the dashboard default rather than sending an invalid
+    # symbol to Delta. Explicit supported symbols remain unchanged.
+    if symbol in ("", "UNDEFINED", "NULL", "NONE", "NAN"):
+        return "BTCUSD"
+
     aliases = {
         "BTC": "BTCUSD",
         "BTC/USDT": "BTCUSD",
