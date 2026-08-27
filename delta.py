@@ -37,11 +37,9 @@ BASE_URL = os.getenv(
 if BASE_URL.endswith("/v2"):
     TICKER_URL = f"{BASE_URL}/tickers"
     CANDLE_URL = f"{BASE_URL}/history/candles"
-    SPARKLINE_URL = f"{BASE_URL}/history/sparklines"
 else:
     TICKER_URL = f"{BASE_URL}/v2/tickers"
     CANDLE_URL = f"{BASE_URL}/v2/history/candles"
-    SPARKLINE_URL = f"{BASE_URL}/v2/history/sparklines"
 
 TIMEOUT = 15
 RETRIES = 3
@@ -379,151 +377,266 @@ def _get_all_tickers():
 
 def get_ticker(symbol="BTCUSD"):
     """
-    Get an exact live ticker from Delta Exchange India.
+    Get exact live ticker from Delta Exchange India.
 
-    Fallback order:
-      1. GET /v2/tickers/{symbol}
-      2. GET /v2/tickers?symbol={symbol}
-      3. GET /v2/history/candles using the latest close
-
-    The fallback candle is only used for displaying/continuing analysis when
-    the public ticker endpoint is temporarily unavailable. It is never used
-    to map one symbol to another.
+    IMPORTANT:
+    The requested symbol MUST match the symbol returned
+    by Delta. This prevents BTCUSD / ETHUSD cross-mapping.
     """
+
     requested_symbol = _validate_symbol(symbol)
 
-    def _build_ticker(result, source):
-        if not isinstance(result, dict):
-            return None
+    # ------------------------------------------------------
+    # METHOD 1
+    # Exact /tickers/{symbol}
+    # ------------------------------------------------------
 
-        returned_symbol = _normalize_symbol(result.get("symbol"))
-        # The path/query itself is symbol-specific. If Delta omits symbol in
-        # the payload, keep the requested symbol rather than rejecting valid
-        # ticker data. If a different symbol is explicitly returned, reject it.
-        if returned_symbol and returned_symbol != requested_symbol:
-            print(
-                "Delta ticker symbol mismatch: "
-                f"requested={requested_symbol}, returned={returned_symbol}"
+    try:
+
+        url = f"{TICKER_URL}/{requested_symbol}"
+
+        payload = _get_json(url)
+
+        result = _extract_ticker_result(
+            payload,
+            requested_symbol
+        )
+
+        if result:
+
+            returned_symbol = _normalize_symbol(
+                result.get("symbol")
             )
+
+            # HARD SAFETY CHECK
+            if returned_symbol != requested_symbol:
+
+                print(
+                    "Delta ticker symbol mismatch: "
+                    f"requested={requested_symbol}, "
+                    f"returned={returned_symbol}"
+                )
+
+            else:
+
+                price = (
+                    result.get("close")
+                    if result.get("close") is not None
+                    else result.get("mark_price")
+                )
+
+                if price is None:
+                    price = result.get("spot_price")
+
+                price = _float(price, None)
+
+                if price is not None and price > 0:
+
+                    return {
+                        "symbol": returned_symbol,
+
+                        "price": price,
+
+                        "close": price,
+
+                        "mark_price": _float(
+                            result.get(
+                                "mark_price"
+                            ),
+                            price
+                        ),
+
+                        "spot_price": _float(
+                            result.get(
+                                "spot_price"
+                            ),
+                            0.0
+                        ),
+
+                        "volume": _float(
+                            result.get(
+                                "volume"
+                            ),
+                            0.0
+                        ),
+
+                        "open": _float(
+                            result.get(
+                                "open"
+                            ),
+                            0.0
+                        ),
+
+                        "high": _float(
+                            result.get(
+                                "high"
+                            ),
+                            0.0
+                        ),
+
+                        "low": _float(
+                            result.get(
+                                "low"
+                            ),
+                            0.0
+                        ),
+
+                        "source": "delta_exact",
+                    }
+
+    except Exception as exc:
+
+        print(
+            f"Delta exact ticker failed "
+            f"[{requested_symbol}]: {exc}"
+        )
+
+
+    # ------------------------------------------------------
+    # METHOD 2
+    # Bulk /tickers fallback
+    #
+    # This is the important protection against a wrong
+    # symbol response.
+    # ------------------------------------------------------
+
+    try:
+
+        tickers = _get_all_tickers()
+
+        exact = None
+
+        for item in tickers:
+
+            if not isinstance(item, dict):
+                continue
+
+            item_symbol = _normalize_symbol(
+                item.get("symbol")
+            )
+
+            if item_symbol == requested_symbol:
+
+                exact = item
+                break
+
+        if exact is None:
+
+            print(
+                f"Delta bulk ticker: "
+                f"{requested_symbol} not found"
+            )
+
             return None
 
-        price = result.get("close")
+        returned_symbol = _normalize_symbol(
+            exact.get("symbol")
+        )
+
+        # HARD SAFETY CHECK
+        if returned_symbol != requested_symbol:
+
+            print(
+                "Delta bulk ticker mismatch: "
+                f"requested={requested_symbol}, "
+                f"returned={returned_symbol}"
+            )
+
+            return None
+
+        price = exact.get("close")
+
         if price is None:
-            price = result.get("mark_price")
+            price = exact.get("mark_price")
+
         if price is None:
-            price = result.get("spot_price")
+            price = exact.get("spot_price")
 
         price = _float(price, None)
+
         if price is None or price <= 0:
             return None
 
         return {
-            "symbol": requested_symbol,
+            "symbol": returned_symbol,
+
             "price": price,
+
             "close": price,
-            "mark_price": _float(result.get("mark_price"), price),
-            "spot_price": _float(result.get("spot_price"), 0.0),
-            "volume": _float(result.get("volume"), 0.0),
-            "open": _float(result.get("open"), 0.0),
-            "high": _float(result.get("high"), 0.0),
-            "low": _float(result.get("low"), 0.0),
-            "source": source,
+
+            "mark_price": _float(
+                exact.get(
+                    "mark_price"
+                ),
+                price
+            ),
+
+            "spot_price": _float(
+                exact.get(
+                    "spot_price"
+                ),
+                0.0
+            ),
+
+            "volume": _float(
+                exact.get(
+                    "volume"
+                ),
+                0.0
+            ),
+
+            "open": _float(
+                exact.get(
+                    "open"
+                ),
+                0.0
+            ),
+
+            "high": _float(
+                exact.get(
+                    "high"
+                ),
+                0.0
+            ),
+
+            "low": _float(
+                exact.get(
+                    "low"
+                ),
+                0.0
+            ),
+
+            "source": "delta_bulk",
         }
 
-    # 1) Exact product endpoint
-    try:
-        payload = _get_json(f"{TICKER_URL}/{requested_symbol}")
-        result = _extract_ticker_result(payload, requested_symbol)
-        ticker = _build_ticker(result, "delta_exact")
-        if ticker:
-            return ticker
     except Exception as exc:
-        print(f"Delta exact ticker failed [{requested_symbol}]: {exc}")
 
-    # 2) Bulk endpoint with a symbol filter. This is useful if the
-    # symbol-specific endpoint is temporarily degraded.
-    try:
-        payload = _get_json(
-            TICKER_URL,
-            params={"symbol": requested_symbol},
+        print(
+            f"Delta bulk ticker failed "
+            f"[{requested_symbol}]: {exc}"
         )
-        result = _extract_ticker_result(payload, requested_symbol)
-        ticker = _build_ticker(result, "delta_filtered")
-        if ticker:
-            return ticker
-    except Exception as exc:
-        print(f"Delta filtered ticker failed [{requested_symbol}]: {exc}")
 
-    # 3) Full bulk ticker fallback, exact symbol only.
+    # METHOD 3: latest 5m candle fallback. Delta's documented
+    # candles endpoint requires start/end timestamps.
     try:
-        tickers = _get_all_tickers()
-        for item in tickers:
-            if not isinstance(item, dict):
-                continue
-            if _normalize_symbol(item.get("symbol")) != requested_symbol:
-                continue
-            ticker = _build_ticker(item, "delta_bulk")
-            if ticker:
-                return ticker
-    except Exception as exc:
-        print(f"Delta bulk ticker failed [{requested_symbol}]: {exc}")
-
-    # 4) Last-resort public market-data fallback. This prevents the dashboard
-    # from showing "Price unavailable" when only /tickers is degraded.
-    try:
-        candles = get_candles(
-            symbol=requested_symbol,
-            resolution="5m",
-            limit=2,
-        )
-        if not candles.empty:
-            last = candles.iloc[-1]
-            price = _float(last.get("close"), None)
-            if price is not None and price > 0:
+        candles = get_candles(symbol=requested_symbol, resolution="5m", limit=2)
+        if candles is not None and not candles.empty and "close" in candles.columns:
+            close = _float(candles["close"].iloc[-1], None)
+            if close is not None and close > 0:
                 return {
                     "symbol": requested_symbol,
-                    "price": price,
-                    "close": price,
-                    "mark_price": price,
+                    "price": close,
+                    "close": close,
+                    "mark_price": close,
                     "spot_price": 0.0,
-                    "volume": _float(last.get("volume"), 0.0),
-                    "open": _float(last.get("open"), 0.0),
-                    "high": _float(last.get("high"), 0.0),
-                    "low": _float(last.get("low"), 0.0),
-                    "source": "delta_candle_fallback",
+                    "volume": _float(candles["volume"].iloc[-1], 0.0) if "volume" in candles.columns else 0.0,
+                    "source": "delta_5m_candle_fallback",
                 }
     except Exception as exc:
         print(f"Delta candle price fallback failed [{requested_symbol}]: {exc}")
 
-    # 5) Sparkline fallback: lightweight public market-data endpoint.
-    try:
-        payload = _get_json(
-            SPARKLINE_URL,
-            params={"symbols": requested_symbol},
-        )
-        result = payload.get("result") if isinstance(payload, dict) else None
-        series = result.get(requested_symbol) if isinstance(result, dict) else None
-        if isinstance(series, list) and series:
-            point = series[-1]
-            if isinstance(point, (list, tuple)) and len(point) >= 2:
-                price = _float(point[1], None)
-                if price is not None and price > 0:
-                    return {
-                        "symbol": requested_symbol,
-                        "price": price,
-                        "close": price,
-                        "mark_price": price,
-                        "spot_price": 0.0,
-                        "volume": 0.0,
-                        "open": 0.0,
-                        "high": 0.0,
-                        "low": 0.0,
-                        "source": "delta_sparkline_fallback",
-                    }
-    except Exception as exc:
-        print(f"Delta sparkline fallback failed [{requested_symbol}]: {exc}")
-
     return None
+
 
 # ==========================================================
 # CURRENT PRICE
