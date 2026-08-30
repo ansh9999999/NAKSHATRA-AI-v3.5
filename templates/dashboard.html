@@ -21,32 +21,8 @@
   <div class="symbols">
     <button class="symbol active" data-symbol="BTCUSD">BTCUSD</button>
     <button class="symbol" data-symbol="ETHUSD">ETHUSD</button>
-    <button class="symbol validation-btn" id="validationToggle">🧪 Backtest</button>
   </div>
 </header>
-
-<section class="card validation-card" id="validationPanel" hidden>
-  <h2>🧪 Backtest & Validation</h2>
-  <div class="validation-form">
-    <label>Historical 5m CSV<input id="backtestFile" type="file" accept=".csv,text/csv"></label>
-    <div class="validation-row">
-      <label>Symbol<select id="backtestSymbol"><option>BTCUSD</option><option>ETHUSD</option></select></label>
-      <label>Horizon<select id="backtestHorizon"><option value="3">15m</option><option value="6">30m</option><option value="12">60m</option></select></label>
-    </div>
-    <button id="runBacktest" class="run-btn">▶ Run Validation</button>
-  </div>
-  <div id="backtestStatus" class="muted">Upload OHLCV CSV: timestamp, open, high, low, close, volume.</div>
-  <div id="backtestResults" hidden>
-    <div class="grid3 validation-metrics">
-      <div class="mini"><b>Trades</b><strong id="btTrades">—</strong></div>
-      <div class="mini"><b>Win Rate</b><strong id="btWinRate">—</strong></div>
-      <div class="mini"><b>Avg Return</b><strong id="btAvgReturn">—</strong></div>
-    </div>
-    <div class="chart-card"><h3>Validation Equity Curve</h3><canvas id="backtestChart"></canvas></div>
-    <div class="table-wrap"><table><thead><tr><th>Horizon</th><th>Trades</th><th>Wins</th><th>Losses</th><th>Win Rate</th><th>Avg Return</th></tr></thead><tbody id="backtestTable"></tbody></table></div>
-    <p class="muted" id="backtestNote"></p>
-  </div>
-</section>
 
 <section class="card market">
   <h2>💰 Live Market</h2>
@@ -68,6 +44,12 @@
     <div class="mini"><b>🌙 Astrology</b><strong id="astrology">—</strong><span id="astrologyScore">Score: —</span></div>
     <div class="mini"><b>🔢 Numerology</b><strong id="numerology">—</strong><span id="numerologyScore">Score: —</span></div>
   </div>
+</section>
+
+<section class="card">
+  <h2>📈 Market Trend</h2>
+  <div id="marketTrendSummary" class="market-trend-summary">Loading...</div>
+  <div id="marketTrendTimeframes" class="mtf">Loading...</div>
 </section>
 
 <section class="card">
@@ -122,5 +104,45 @@
 <footer>NAKSHATRA AI v4.0 • Auto refresh 10 seconds</footer>
 </div>
 <script src="/static/app.js"></script>
+<script>
+(function(){
+  let trendSymbol = document.querySelector('.symbol.active')?.dataset.symbol || 'BTCUSD';
+  const esc = v => String(v ?? '—').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  function trendClass(t){ return String(t||'UNKNOWN').toLowerCase().replaceAll('_','-'); }
+  function overall(items){
+    const valid=items.filter(x=>x && x.trend && x.trend!=='UNKNOWN');
+    if(!valid.length) return ['UNKNOWN',0];
+    const score=valid.reduce((a,x)=>a+(Number(x.score)||0),0);
+    const bull=valid.filter(x=>String(x.trend).includes('BULL')).length;
+    const bear=valid.filter(x=>String(x.trend).includes('BEAR')).length;
+    const side=valid.filter(x=>String(x.trend)==='SIDEWAYS').length;
+    let label='SIDEWAYS';
+    if(bull>bear && bull>=side) label=bull>=Math.ceil(valid.length*0.6)?'STRONG BULL':'BULL';
+    else if(bear>bull && bear>=side) label=bear>=Math.ceil(valid.length*0.6)?'STRONG BEAR':'BEAR';
+    return [label,score];
+  }
+  async function loadTrend(){
+    try{
+      const r=await fetch('/api/live?symbol='+encodeURIComponent(trendSymbol)+'&force=true');
+      const j=await r.json();
+      const a=j.analysis||j;
+      const t=a?.technical?.trend||{};
+      const keys=['5m','15m','1h','1d','1w','1mo'];
+      const rows=keys.map(k=>[k,t[k]]).filter(([,v])=>v);
+      const [label,score]=overall(rows.map(([,v])=>v));
+      const sum=document.getElementById('marketTrendSummary');
+      const box=document.getElementById('marketTrendTimeframes');
+      if(sum) sum.innerHTML='<div class="trend-overall"><span>Overall Trend</span><strong class="trend-'+trendClass(label)+'">'+esc(label)+'</strong><span>Score: '+esc(score)+'</span></div>';
+      if(box) box.innerHTML=rows.map(([k,v])=>'<div class="trend-row"><b>'+esc(k)+'</b><strong class="trend-'+trendClass(v.trend)+'">'+esc(v.trend)+'</strong><span>Score: '+esc(v.score)+'</span></div>').join('');
+    }catch(e){
+      const box=document.getElementById('marketTrendTimeframes'); if(box) box.textContent='Trend data unavailable';
+    }
+  }
+  document.querySelectorAll('.symbol').forEach(b=>b.addEventListener('click',()=>{ trendSymbol=b.dataset.symbol||trendSymbol; setTimeout(loadTrend,150); }));
+  loadTrend();
+  setInterval(loadTrend,10000);
+})();
+</script>
+
 </body>
 </html>
