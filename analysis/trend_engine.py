@@ -3,6 +3,19 @@
 from analysis.indicators import ema9, ema50, ema200, trend_strength
 
 
+def classify_trend(score):
+    """Return one of the five dashboard trend states."""
+    if score >= 40:
+        return "STRONG_BULL"
+    if score >= 15:
+        return "BULL"
+    if score <= -40:
+        return "STRONG_BEAR"
+    if score <= -15:
+        return "BEAR"
+    return "SIDEWAYS"
+
+
 def analyze_trend(df, timeframe="5m"):
     """
     Analyze trend for a specific timeframe.
@@ -33,7 +46,7 @@ def analyze_trend(df, timeframe="5m"):
     ema50_value = float(ema50(close).iloc[-1])
     ema200_value = float(ema200(close).iloc[-1])
 
-    trend = trend_strength(close)
+    base_trend = trend_strength(close)
 
     score = 0
     reasons = []
@@ -55,21 +68,26 @@ def analyze_trend(df, timeframe="5m"):
         reasons.append(f"{timeframe}: EMA9 < EMA50")
 
     # Trend strength
-    if trend == "STRONG_BULL":
+    if base_trend == "STRONG_BULL":
         score += 20
         reasons.append(f"{timeframe}: Strong Bull Trend")
 
-    elif trend == "BULL":
+    elif base_trend == "BULL":
         score += 10
         reasons.append(f"{timeframe}: Bull Trend")
 
-    elif trend == "STRONG_BEAR":
+    elif base_trend == "STRONG_BEAR":
         score -= 20
         reasons.append(f"{timeframe}: Strong Bear Trend")
 
-    elif trend == "BEAR":
+    elif base_trend == "BEAR":
         score -= 10
         reasons.append(f"{timeframe}: Bear Trend")
+
+    trend = classify_trend(score)
+
+    if trend == "SIDEWAYS":
+        reasons.append(f"{timeframe}: Bull/Bear forces are balanced — SIDEWAYS")
 
     return {
         "trend": trend,
@@ -105,6 +123,10 @@ def analyze_multi_timeframe(data):
         reasons.extend(analysis["reasons"])
 
     result["total_score"] = total_score
+
+    available = [tf for tf in ["5m", "15m", "1h", "1d", "1w", "1mo"] if tf in result]
+    average_score = total_score / max(1, len(available))
+    result["overall_trend"] = classify_trend(average_score)
     result["reasons"] = reasons
 
     return result
