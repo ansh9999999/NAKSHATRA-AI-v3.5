@@ -14,8 +14,10 @@ The trading/analysis engine is not changed. This file:
 from contextlib import asynccontextmanager
 import time
 import math
+import os
+import tempfile
 
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, Request, HTTPException, UploadFile, File
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -313,6 +315,97 @@ def api_history():
         })
 
     return _json_safe(history)
+
+
+
+@app.post("/api/backtest")
+async def api_backtest(
+    file: UploadFile = File(...),
+    symbol: str = "BTCUSD",
+    horizons: str = "3,6,12",
+):
+    """Run historical 5m CSV validation without placing trades."""
+    symbol = canonical_symbol(symbol)
+
+    filename = (file.filename or "").lower()
+    if not filename.endswith(".csv"):
+        raise HTTPException(status_code=400, detail="Please upload a CSV file.")
+
+    try:
+        parsed_horizons = tuple(
+            int(x.strip()) for x in str(horizons).split(",") if x.strip()
+        )
+        parsed_horizons = tuple(h for h in parsed_horizons if h > 0)
+        if not parsed_horizons:
+            raise ValueError("At least one positive horizon is required.")
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid horizons: {exc}")
+
+    temp_path = None
+    try:
+        raw = await file.read()
+        if not raw:
+            raise ValueError("Uploaded CSV is empty.")
+        if len(raw) > 25 * 1024 * 1024:
+            raise ValueError("CSV is too large. Maximum size is 25 MB.")
+
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".csv") as tmp:
+            tmp.write(raw)
+            temp_path = tmp.name
+
+        from validation.backtest import run_backtest
+        results, summary, confidence = run_backtest(
+            temp_path,
+            symbol=symbol,
+            horizons=parsed_horizons,
+            step=1,
+            min_history=250,
+        )
+
+        summary_records = _json_safe(summary.to_dict(orient="records"))
+        confidence_records = _json_safe(confidence.to_dict(orient="records"))
+
+        # Equity curve uses the selected/first horizon and BUY/SELL signals.
+        primary_h = parsed_horizons[0]
+        curve_df = results[
+            (results["horizon"] == primary_h)
+            & (results["signal"].isin(["BUY", "SELL"]))
+        ].sort_values("timestamp")
+
+        equity_curve = []
+        cumulative = 0.0
+        for _, row in curve_df.iterrows():
+            cumulative += float(row.get("signal_return_pct", 0) or 0)
+            equity_curve.append({
+                "timestamp": row["timestamp"].isoformat()
+                    if hasattr(row["timestamp"], "isoformat")
+                    else str(row["timestamp"]),
+                "value": round(cumulative, 6),
+            })
+
+        return _json_safe({
+            "status": "OK",
+            "symbol": symbol,
+            "rows": int(len(results)),
+            "summary": summary_records,
+            "confidence": confidence_records,
+            "equity_curve": equity_curve,
+            "note": (
+                f"Historical validation completed using {len(results)} evaluated "
+                f"rows; primary horizon {primary_h * 5}m."
+            ),
+        })
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Historical validation failed")
+        raise HTTPException(status_code=400, detail=str(exc))
+    finally:
+        if temp_path:
+            try:
+                os.unlink(temp_path)
+            except OSError:
+                pass
 
 
 @app.get("/api/scanner")
