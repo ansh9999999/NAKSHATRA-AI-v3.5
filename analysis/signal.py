@@ -10,6 +10,7 @@ from analysis.confidence_engine import calculate_decision
 
 from analysis.astrology_engine import analyze_astrology
 from analysis.numerology_engine import analyze_numerology
+from analysis.option_chain_engine import analyze_option_chain
 
 
 def generate_signal(data):
@@ -31,11 +32,14 @@ def generate_signal(data):
     # ---------------------------------
 
     trend_data = {
-        "5m": data["5m"],
-        "15m": data["15m"],
-        "1h": data["1h"],
-        "1d": data["1d"]
+        "5m": data.get("5m"),
+        "15m": data.get("15m"),
+        "1h": data.get("1h"),
+        "1d": data.get("1d"),
+        "1w": data.get("1w"),
+        "1mo": data.get("1mo"),
     }
+    trend_data = {k: v for k, v in trend_data.items() if v is not None}
 
     trend_result = analyze_multi_timeframe(trend_data)
 
@@ -134,13 +138,23 @@ def generate_signal(data):
     )
 
     # ---------------------------------
+    # Full Option Chain
+    # ---------------------------------
+
+    option_chain_result = analyze_option_chain(
+        symbol=symbol,
+        spot_price=float(entry_df["close"].iloc[-1])
+    )
+
+    # ---------------------------------
     # Final Recommendation
     # ---------------------------------
 
     result = calculate_decision(
         technical_result,
         astrology_result,
-        numerology_result
+        numerology_result,
+        option_chain_result
     )
 
     # ---------------------------------
@@ -148,6 +162,7 @@ def generate_signal(data):
     # ---------------------------------
 
     result["symbol"] = symbol
+    result["option_chain"] = option_chain_result
 
     result["price"] = float(
         entry_df["close"].iloc[-1]
