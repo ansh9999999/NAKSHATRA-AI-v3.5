@@ -100,3 +100,33 @@ footer { text-align: center; color: #62728b; font-size: 10px; padding: 18px; }
 @media (max-width: 600px) {
   .validation-row { grid-template-columns: 1fr; }
 }
+
+/* Market Trend + Full Option Chain */
+.trend-overall-card, .oc-head {
+  display: flex; justify-content: space-between; gap: 10px; align-items: center;
+  background: #172640; border-radius: 9px; padding: 11px; margin-bottom: 9px;
+}
+.trend-overall-card div, .oc-head div { display: flex; flex-direction: column; gap: 4px; }
+.trend-overall-card small, .oc-head small { color: #8fa2be; font-size: 10px; }
+.trend-overall-card strong, .oc-head strong { font-size: 16px; }
+.trend-table { display: grid; gap: 5px; }
+.trend-row {
+  display: grid; grid-template-columns: 45px 1fr auto; gap: 8px; align-items: center;
+  background: #172640; border-radius: 7px; padding: 8px 9px; font-size: 11px;
+}
+.trend-row b { color: #8fa2be; }
+.trend-row span { color: #91a3bd; }
+.trend-strong-bull, .trend-bull, .trend-bullish { color: #39d98a; }
+.trend-strong-bear, .trend-bear, .trend-bearish { color: #ff6678; }
+.trend-sideways, .trend-neutral { color: #ffd166; }
+.oc-head span { color: #91a3bd; font-size: 10px; }
+.oc-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 7px; }
+.oc-grid .mini { min-height: 62px; }
+.oc-top-oi { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 9px; }
+.oc-side { background: #172640; border-radius: 8px; padding: 9px; font-size: 10px; }
+.oc-side > b { display: block; color: #9fb0c9; margin-bottom: 6px; }
+.oc-side > div { display: flex; justify-content: space-between; padding: 4px 0; border-bottom: 1px solid #22314b; }
+@media (max-width: 520px) {
+  .oc-grid { grid-template-columns: 1fr 1fr; }
+  .oc-top-oi { grid-template-columns: 1fr; }
+}
