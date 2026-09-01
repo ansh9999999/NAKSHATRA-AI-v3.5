@@ -48,8 +48,33 @@
 
 <section class="card">
   <h2>📈 Market Trend</h2>
-  <div id="marketTrendSummary" class="market-trend-summary">Loading...</div>
-  <div id="marketTrendTimeframes" class="mtf">Loading...</div>
+  <div class="trend-overall-card">
+    <div><small>Overall Trend</small><strong id="marketTrendOverall">—</strong></div>
+    <span id="marketTrendScore">Score: —</span>
+  </div>
+  <div id="marketTrendTable" class="trend-table">Loading...</div>
+</section>
+
+<section class="card option-chain-card">
+  <h2>⛓️ Full Option Chain Analysis</h2>
+  <div class="oc-head">
+    <div><small>Option Chain Trend</small><strong id="ocSignal">—</strong><span id="ocConfidence">—</span></div>
+    <div><small>Expiry</small><strong id="ocExpiry">—</strong></div>
+  </div>
+  <div class="oc-grid">
+    <div class="mini"><b>PCR (OI)</b><strong id="ocPcr">—</strong></div>
+    <div class="mini"><b>PCR (Volume)</b><strong id="ocVolumePcr">—</strong></div>
+    <div class="mini"><b>ATM Strike</b><strong id="ocAtm">—</strong></div>
+    <div class="mini"><b>Put OI Support</b><strong id="ocSupport">—</strong></div>
+    <div class="mini"><b>Call OI Resistance</b><strong id="ocResistance">—</strong></div>
+    <div class="mini"><b>Max Pain</b><strong id="ocMaxPain">—</strong></div>
+    <div class="mini"><b>Total Call OI</b><strong id="ocCallOi">—</strong></div>
+    <div class="mini"><b>Total Put OI</b><strong id="ocPutOi">—</strong></div>
+    <div class="mini"><b>Call Volume</b><strong id="ocCallVol">—</strong></div>
+    <div class="mini"><b>Put Volume</b><strong id="ocPutVol">—</strong></div>
+  </div>
+  <div id="ocTopOi" class="oc-top-oi"></div>
+  <div id="ocNote" class="muted">Loading option-chain data...</div>
 </section>
 
 <section class="card">
@@ -63,6 +88,7 @@
     <div>Technical <span id="agreeTechnical">—</span></div>
     <div>Astrology <span id="agreeAstrology">—</span></div>
     <div>Numerology <span id="agreeNumerology">—</span></div>
+    <div>Option Chain <span id="agreeOptionChain">—</span></div>
     <div>Final Agreement <span id="agreeFinal">—</span></div>
   </div>
 </section>
