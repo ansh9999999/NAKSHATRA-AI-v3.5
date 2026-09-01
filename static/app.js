@@ -53,6 +53,7 @@ function renderAnalysis(payload) {
   const astrology = a.astrology || {};
   const numerology = a.numerology || {};
   const agreement = a.agreement || {};
+  const optionChain = a.option_chain || {};
 
   text("decision", a.recommendation || a.action || "WAIT");
   text("confidence", `Overall Confidence: ${a.overall_confidence ?? "—"}`);
@@ -75,7 +76,11 @@ function renderAnalysis(payload) {
   text("agreeTechnical", technical.signal || "—");
   text("agreeAstrology", astrology.bias || "—");
   text("agreeNumerology", numerology.bias || "—");
-  text("agreeFinal", typeof agreement === "string" ? agreement : (agreement.final || agreement.status || "—"));
+  text("agreeOptionChain", optionChain.signal || "—");
+  text("agreeFinal", typeof agreement === "string" ? agreement : (agreement.final || agreement.status || a.recommendation || "—"));
+
+  renderMarketTrend(technical.trend || {});
+  renderOptionChain(optionChain);
 
   text("ema9", trend["5m"]?.ema9 ?? technical.ema9 ?? "—");
   text("ema50", trend["5m"]?.ema50 ?? technical.ema50 ?? "—");
@@ -88,6 +93,59 @@ function renderAnalysis(payload) {
   $("reasons").innerHTML = reasons.length
     ? reasons.slice(0, 20).map(r => `<li>${escapeHtml(String(r))}</li>`).join("")
     : "<li>No reasons returned by analysis engine.</li>";
+}
+
+
+function renderMarketTrend(trend) {
+  const keys = ["5m", "15m", "1h", "1d", "1w", "1mo"];
+  const rows = keys.map(tf => ({ tf, ...(trend[tf] || {}) }));
+  const available = rows.filter(x => x.trend && x.trend !== "UNKNOWN");
+  const total = available.reduce((n, x) => n + (Number(x.score) || 0), 0);
+  const avg = available.length ? total / available.length : 0;
+  let overall = "SIDEWAYS";
+  if (avg >= 40) overall = "STRONG_BULL";
+  else if (avg >= 15) overall = "BULL";
+  else if (avg <= -40) overall = "STRONG_BEAR";
+  else if (avg <= -15) overall = "BEAR";
+
+  text("marketTrendOverall", overall);
+  text("marketTrendScore", `Score: ${total}`);
+  const box = $("marketTrendTable");
+  if (!box) return;
+  box.innerHTML = rows.map(x => `
+    <div class="trend-row">
+      <b>${escapeHtml(x.tf)}</b>
+      <strong class="trend-${escapeHtml(String(x.trend || "UNKNOWN").toLowerCase().replaceAll("_", "-"))}">${escapeHtml(x.trend || "UNKNOWN")}</strong>
+      <span>Score: ${escapeHtml(String(x.score ?? "—"))}</span>
+    </div>`).join("");
+}
+
+function renderOptionChain(o) {
+  const status = String(o.status || "NO DATA");
+  text("ocSignal", o.signal || "NEUTRAL");
+  text("ocConfidence", status === "OK" ? `Confidence: ${o.confidence ?? "—"}%` : status);
+  text("ocExpiry", o.expiry || "—");
+  text("ocPcr", o.pcr ?? "—");
+  text("ocVolumePcr", o.volume_pcr ?? "—");
+  text("ocCallOi", o.call_oi ?? "—");
+  text("ocPutOi", o.put_oi ?? "—");
+  text("ocCallVol", o.call_volume ?? "—");
+  text("ocPutVol", o.put_volume ?? "—");
+  text("ocSupport", o.max_put_oi_support ?? "—");
+  text("ocResistance", o.max_call_oi_resistance ?? "—");
+  text("ocMaxPain", o.max_pain ?? "—");
+  text("ocAtm", o.atm_strike ?? "—");
+  const note = $("ocNote");
+  if (note) note.textContent = status === "OK" ? (o.reason || "Live Delta option-chain data") : (o.reason || "Option-chain data unavailable");
+
+  const calls = Array.isArray(o.top_call_oi) ? o.top_call_oi : [];
+  const puts = Array.isArray(o.top_put_oi) ? o.top_put_oi : [];
+  const top = $("ocTopOi");
+  if (top) {
+    top.innerHTML = `
+      <div class="oc-side"><b>Top CALL OI</b>${calls.map(r => `<div><span>${escapeHtml(String(r.strike))}</span><span>${escapeHtml(String(r.oi))}</span></div>`).join("") || "<div>—</div>"}</div>
+      <div class="oc-side"><b>Top PUT OI</b>${puts.map(r => `<div><span>${escapeHtml(String(r.strike))}</span><span>${escapeHtml(String(r.oi))}</span></div>`).join("") || "<div>—</div>"}</div>`;
+  }
 }
 
 function renderMarket(payload) {
