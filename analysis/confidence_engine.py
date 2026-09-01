@@ -28,21 +28,25 @@ def _normalize_direction(signal):
 def calculate_decision(
     technical_result,
     astrology_result,
-    numerology_result
+    numerology_result,
+    option_chain_result=None
 ):
     technical_signal = technical_result.get("signal", "NEUTRAL")
     astrology_signal = astrology_result.get("bias", "NEUTRAL")
     numerology_signal = numerology_result.get("bias", "NEUTRAL")
+    option_chain_signal = (option_chain_result or {}).get("signal", "NEUTRAL")
 
     # Normalize labels before comparing directions.
     technical_direction = _normalize_direction(technical_signal)
     astrology_direction = _normalize_direction(astrology_signal)
     numerology_direction = _normalize_direction(numerology_signal)
+    option_chain_direction = _normalize_direction(option_chain_signal)
 
     directions = [
         technical_direction,
         astrology_direction,
         numerology_direction,
+        option_chain_direction,
     ]
 
     # -------------------------------------------------
@@ -68,16 +72,21 @@ def calculate_decision(
     # -------------------------------------------------
     # Weighted directional score
     #
-    # Technical = 60%
-    # Astrology = 20%
-    # Numerology = 20%
+    # Technical = 50%
+    # Option Chain = 20%
+    # Astrology = 15%
+    # Numerology = 15%
     #
-    # Neutral contributes zero.
+    # Neutral contributes zero. If option-chain data is unavailable,
+    # its weight is redistributed to technical analysis so the existing
+    # system remains operational.
     # -------------------------------------------------
+    option_available = str((option_chain_result or {}).get("status", "NO DATA")).upper() == "OK"
     weights = {
-        "technical": 0.60,
-        "astrology": 0.20,
-        "numerology": 0.20,
+        "technical": 0.50 if option_available else 0.60,
+        "option_chain": 0.20 if option_available else 0.00,
+        "astrology": 0.15 if option_available else 0.20,
+        "numerology": 0.15 if option_available else 0.20,
     }
 
     weighted_score = 0.0
@@ -96,6 +105,11 @@ def calculate_decision(
         weighted_score += weights["numerology"]
     elif numerology_direction == "BEARISH":
         weighted_score -= weights["numerology"]
+
+    if option_chain_direction == "BULLISH":
+        weighted_score += weights["option_chain"]
+    elif option_chain_direction == "BEARISH":
+        weighted_score -= weights["option_chain"]
 
     # -------------------------------------------------
     # Confidence
@@ -170,8 +184,18 @@ def calculate_decision(
     # Add transparent decision-engine explanations.
     reasons.append(
         f"Direction votes: Bullish={bullish_votes}, "
-        f"Bearish={bearish_votes}, Neutral={3-directional_votes}"
+        f"Bearish={bearish_votes}, Neutral={4-directional_votes}"
     )
+    if option_available:
+        reasons.append(
+            f"Option Chain: {option_chain_signal} | "
+            f"PCR={option_chain_result.get('pcr', '—')} | "
+            f"Support={option_chain_result.get('max_put_oi_support', '—')} | "
+            f"Resistance={option_chain_result.get('max_call_oi_resistance', '—')} | "
+            f"Max Pain={option_chain_result.get('max_pain', '—')}"
+        )
+    else:
+        reasons.append("Option Chain: unavailable; decision engine used fallback weights")
     reasons.append(
         f"Weighted score: {weighted_score:.2f}"
     )
@@ -189,11 +213,13 @@ def calculate_decision(
         "technical": technical_result,
         "astrology": astrology_result,
         "numerology": numerology_result,
+        "option_chain": option_chain_result or {"status": "NO DATA", "signal": "NEUTRAL"},
 
         "normalized": {
             "technical": technical_direction,
             "astrology": astrology_direction,
             "numerology": numerology_direction,
+            "option_chain": option_chain_direction,
         },
 
         "votes": {
