@@ -378,6 +378,39 @@ def _get_all_tickers():
 
 
 # ==========================================================
+# OPTION CHAIN TICKERS
+# ==========================================================
+
+def get_option_tickers(underlying_asset="BTC", expiry_date=None):
+    """Get public Delta option-chain tickers for an underlying asset.
+
+    Delta documents /v2/tickers with contract_types=call_options,put_options
+    and an underlying asset symbol. An optional expiry_date is DD-MM-YYYY.
+    """
+    underlying_asset = str(underlying_asset or "").upper().strip()
+    if underlying_asset not in ("BTC", "ETH"):
+        raise ValueError("Unsupported option underlying")
+
+    params = {
+        "contract_types": "call_options,put_options",
+        "underlying_asset_symbols": underlying_asset,
+    }
+    if expiry_date:
+        params["expiry_date"] = str(expiry_date)
+
+    payload = _get_json(TICKER_URL, params=params)
+    result = payload.get("result") if isinstance(payload, dict) else None
+    if isinstance(result, list):
+        return result
+    if isinstance(result, dict):
+        for key in ("data", "tickers", "rows", "result"):
+            value = result.get(key)
+            if isinstance(value, list):
+                return value
+    return []
+
+
+# ==========================================================
 # LIVE TICKER
 # ==========================================================
 
