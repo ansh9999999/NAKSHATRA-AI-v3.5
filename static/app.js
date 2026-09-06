@@ -267,16 +267,38 @@ function escapeHtml(value) {
     .replaceAll("'", "&#039;");
 }
 
-document.querySelectorAll(".symbol").forEach(btn => {
-  btn.addEventListener("click", () => {
-    document.querySelectorAll(".symbol").forEach(b => b.classList.remove("active"));
-    btn.classList.add("active");
-    state.symbol = btn.dataset.symbol;
-    loadLive();
-  });
+function setActiveButton(id) {
+  document.querySelectorAll(".symbol").forEach(b => b.classList.remove("active"));
+  const btn = $(id);
+  if (btn) btn.classList.add("active");
+}
+
+function showLiveMode(symbol) {
+  state.symbol = symbol || "BTCUSD";
+  const live = $("liveDashboard");
+  const test = $("validationPanel");
+  if (live) live.hidden = false;
+  if (test) test.hidden = true;
+  setActiveButton(state.symbol === "ETHUSD" ? "ethButton" : "btcButton");
+  loadLive();
+}
+
+function showTestMode() {
+  const live = $("liveDashboard");
+  const test = $("validationPanel");
+  if (live) live.hidden = true;
+  if (test) test.hidden = false;
+  setActiveButton("validationToggle");
+  test?.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+document.querySelectorAll(".symbol[data-symbol]").forEach(btn => {
+  btn.addEventListener("click", () => showLiveMode(btn.dataset.symbol));
 });
 
 async function refreshAll() {
+  // TEST mode is isolated from the live dashboard.
+  if ($("validationPanel") && !$("validationPanel").hidden) return;
   await Promise.allSettled([
     loadLive(),
     loadScanner(),
@@ -296,12 +318,7 @@ const validationPanel = $("validationPanel");
 const runBacktestBtn = $("runBacktest");
 
 if (validationToggle && validationPanel) {
-  validationToggle.addEventListener("click", () => {
-    validationPanel.hidden = !validationPanel.hidden;
-    if (!validationPanel.hidden) {
-      validationPanel.scrollIntoView({ behavior: "smooth", block: "start" });
-    }
-  });
+  validationToggle.addEventListener("click", showTestMode);
 }
 
 function drawValidationEquity(points) {
