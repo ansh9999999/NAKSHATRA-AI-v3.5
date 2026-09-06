@@ -21,10 +21,66 @@
   <div class="symbols">
     <button class="symbol active" data-symbol="BTCUSD">BTCUSD</button>
     <button class="symbol" data-symbol="ETHUSD">ETHUSD</button>
-    <button id="validationToggle" class="symbol">🧪 Backtest</button>
+    <button id="validationToggle" class="symbol">🧪 TEST</button>
   </div>
 </header>
-<section id="validationPanel" class="card validation-card" hidden>
+
+
+
+<section class="card market">
+  <h2>💰 Live Market</h2>
+  <div id="livePrice" class="big">Loading...</div>
+  <div id="liveMeta" class="muted">—</div>
+</section>
+
+<section class="card decision">
+  <h2>🎯 NAKSHATRA Decision</h2>
+  <div id="decision" class="big">Loading...</div>
+  <div id="confidence" class="muted">Overall Confidence: —</div>
+  <div id="action" class="muted">Action: —</div>
+</section>
+
+<section class="card">
+  <h2>🧠 Analysis Modules</h2>
+  <div class="grid3">
+    <div class="mini"><b>Technical</b><strong id="technical">—</strong><span id="technicalConf">Confidence: —</span></div>
+    <div class="mini"><b>🌙 Astrology</b><strong id="astrology">—</strong><span id="astrologyScore">Score: —</span></div>
+    <div class="mini"><b>🔢 Numerology</b><strong id="numerology">—</strong><span id="numerologyScore">Score: —</span></div>
+  </div>
+</section>
+
+<section class="card">
+  <h2>📈 Market Trend</h2>
+  <div class="trend-overall-card">
+    <div><small>Overall Trend</small><strong id="marketTrendOverall">—</strong></div>
+    <span id="marketTrendScore">Score: —</span>
+  </div>
+  <div id="marketTrendTable" class="trend-table">Loading...</div>
+</section>
+
+<section class="card option-chain-card">
+  <h2>⛓️ Full Option Chain Analysis</h2>
+  <div class="oc-head">
+    <div><small>Option Chain Trend</small><strong id="ocSignal">—</strong><span id="ocConfidence">—</span></div>
+    <div><small>Expiry</small><strong id="ocExpiry">—</strong></div>
+  </div>
+  <div class="oc-grid">
+    <div class="mini"><b>PCR (OI)</b><strong id="ocPcr">—</strong></div>
+    <div class="mini"><b>PCR (Volume)</b><strong id="ocVolumePcr">—</strong></div>
+    <div class="mini"><b>ATM Strike</b><strong id="ocAtm">—</strong></div>
+    <div class="mini"><b>Put OI Support</b><strong id="ocSupport">—</strong></div>
+    <div class="mini"><b>Call OI Resistance</b><strong id="ocResistance">—</strong></div>
+    <div class="mini"><b>Max Pain</b><strong id="ocMaxPain">—</strong></div>
+    <div class="mini"><b>Total Call OI</b><strong id="ocCallOi">—</strong></div>
+    <div class="mini"><b>Total Put OI</b><strong id="ocPutOi">—</strong></div>
+    <div class="mini"><b>Call Volume</b><strong id="ocCallVol">—</strong></div>
+    <div class="mini"><b>Put Volume</b><strong id="ocPutVol">—</strong></div>
+  </div>
+  <div id="ocTopOi" class="oc-top-oi"></div>
+  <div id="ocNote" class="muted">Loading option-chain data...</div>
+</section>
+
+<section id="validationPanel" class="card validation-card">
   <h2>🧪 Historical Backtest / Validation</h2>
   <div class="validation-form">
     <label>
@@ -79,60 +135,6 @@
     </div>
     <div id="backtestNote" class="muted"></div>
   </div>
-</section>
-
-
-<section class="card market">
-  <h2>💰 Live Market</h2>
-  <div id="livePrice" class="big">Loading...</div>
-  <div id="liveMeta" class="muted">—</div>
-</section>
-
-<section class="card decision">
-  <h2>🎯 NAKSHATRA Decision</h2>
-  <div id="decision" class="big">Loading...</div>
-  <div id="confidence" class="muted">Overall Confidence: —</div>
-  <div id="action" class="muted">Action: —</div>
-</section>
-
-<section class="card">
-  <h2>🧠 Analysis Modules</h2>
-  <div class="grid3">
-    <div class="mini"><b>Technical</b><strong id="technical">—</strong><span id="technicalConf">Confidence: —</span></div>
-    <div class="mini"><b>🌙 Astrology</b><strong id="astrology">—</strong><span id="astrologyScore">Score: —</span></div>
-    <div class="mini"><b>🔢 Numerology</b><strong id="numerology">—</strong><span id="numerologyScore">Score: —</span></div>
-  </div>
-</section>
-
-<section class="card">
-  <h2>📈 Market Trend</h2>
-  <div class="trend-overall-card">
-    <div><small>Overall Trend</small><strong id="marketTrendOverall">—</strong></div>
-    <span id="marketTrendScore">Score: —</span>
-  </div>
-  <div id="marketTrendTable" class="trend-table">Loading...</div>
-</section>
-
-<section class="card option-chain-card">
-  <h2>⛓️ Full Option Chain Analysis</h2>
-  <div class="oc-head">
-    <div><small>Option Chain Trend</small><strong id="ocSignal">—</strong><span id="ocConfidence">—</span></div>
-    <div><small>Expiry</small><strong id="ocExpiry">—</strong></div>
-  </div>
-  <div class="oc-grid">
-    <div class="mini"><b>PCR (OI)</b><strong id="ocPcr">—</strong></div>
-    <div class="mini"><b>PCR (Volume)</b><strong id="ocVolumePcr">—</strong></div>
-    <div class="mini"><b>ATM Strike</b><strong id="ocAtm">—</strong></div>
-    <div class="mini"><b>Put OI Support</b><strong id="ocSupport">—</strong></div>
-    <div class="mini"><b>Call OI Resistance</b><strong id="ocResistance">—</strong></div>
-    <div class="mini"><b>Max Pain</b><strong id="ocMaxPain">—</strong></div>
-    <div class="mini"><b>Total Call OI</b><strong id="ocCallOi">—</strong></div>
-    <div class="mini"><b>Total Put OI</b><strong id="ocPutOi">—</strong></div>
-    <div class="mini"><b>Call Volume</b><strong id="ocCallVol">—</strong></div>
-    <div class="mini"><b>Put Volume</b><strong id="ocPutVol">—</strong></div>
-  </div>
-  <div id="ocTopOi" class="oc-top-oi"></div>
-  <div id="ocNote" class="muted">Loading option-chain data...</div>
 </section>
 
 <section class="card">
