@@ -27,6 +27,7 @@
 
 
 
+<div id="liveDashboard">
 <section class="card market">
   <h2>💰 Live Market</h2>
   <div id="livePrice" class="big">Loading...</div>
@@ -80,8 +81,11 @@
   <div id="ocNote" class="muted">Loading option-chain data...</div>
 </section>
 
-<section id="validationPanel" class="card validation-card">
-  <h2>🧪 Historical Backtest / Validation</h2>
+</div>
+
+<section id="validationPanel" class="card validation-card" hidden>
+  <h2>🧪 TEST LAB — Historical Backtest / Validation</h2>
+  <div class="test-mode-note">TEST mode uses the uploaded historical CSV only. Live BTC/ETH dashboard data is hidden while TEST is active.</div>
   <div class="validation-form">
     <label>
       Historical 5m CSV
