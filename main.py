@@ -30,22 +30,15 @@ from history import get_multi_timeframe_history
 from analysis.signal import generate_signal
 from scanner import market_scan
 from delta import get_ticker
+from market_registry import MARKETS, canonical_symbol as market_symbol, get_market
 
 CACHE_TTL = 8
 _analysis_cache = {}
 
 
-def canonical_symbol(value, default="BTCUSD"):
-    """Normalize dashboard/API symbols and prevent JavaScript undefined leakage."""
-    s = str(value or "").strip().upper()
-    if s in ("", "UNDEFINED", "NULL", "NONE", "NAN"):
-        return default
-    aliases = {
-        "BTC": "BTCUSD", "BTC/USDT": "BTCUSD", "BTC-USDT": "BTCUSD",
-        "ETH": "ETHUSD", "ETH/USDT": "ETHUSD", "ETH-USDT": "ETHUSD",
-    }
-    s = aliases.get(s, s)
-    if s not in ("BTCUSD", "ETHUSD"):
+def canonical_symbol(value, default="NIFTY50"):
+    s = market_symbol(value, default=default)
+    if s not in MARKETS:
         raise HTTPException(status_code=400, detail=f"Unsupported symbol: {s}")
     return s
 
@@ -175,8 +168,8 @@ def api():
         "project": "NAKSHATRA AI",
         "version": "4.0",
         "status": "RUNNING",
-        "supported_symbols": ["BTCUSD", "ETHUSD"],
-        "dashboard_api": "/api/live?symbol=BTCUSD",
+        "supported_symbols": list(MARKETS.keys()),
+        "dashboard_api": "/api/live?symbol=NIFTY50",
     }
 
 
@@ -186,8 +179,16 @@ def api_live(symbol: str = "BTCUSD", force: bool = False):
     analysis = run_analysis(symbol, force=force)
 
     ticker = None
+    market = get_market(symbol)
     try:
-        ticker = get_ticker(symbol)
+        if market and market.get("provider") == "delta":
+            ticker = get_ticker(symbol)
+        elif market and market.get("provider") == "yahoo":
+            # Latest candle is the safe live-market representation for the public index feed.
+            ticker = {"symbol": symbol, "price": analysis.get("price"), "close": analysis.get("price"),
+                      "mark_price": analysis.get("price"), "volume": 0.0, "source": "yahoo_latest_candle"}
+        else:
+            ticker = None
     except Exception as exc:
         logger.warning("Ticker failed %s: %s", symbol, exc)
 
@@ -213,7 +214,7 @@ def api_live(symbol: str = "BTCUSD", force: bool = False):
 
 
 @app.get("/api/debug-data")
-def debug_data(symbol: str = "BTCUSD"):
+def debug_data(symbol: str = "NIFTY50"):
     symbol = canonical_symbol(symbol)
     data = get_multi_timeframe_history(symbol, limit=20)
 
@@ -414,7 +415,7 @@ def api_scanner():
     # fresh Delta requests for each scanner refresh.
     results = []
 
-    for symbol in ("BTCUSD", "ETHUSD"):
+    for symbol in MARKETS:
         result = run_analysis(symbol)
         technical = result.get("technical", {}) if isinstance(result, dict) else {}
 
