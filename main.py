@@ -30,6 +30,7 @@ from history import get_multi_timeframe_history
 from analysis.signal import generate_signal
 from scanner import market_scan
 from delta import get_ticker
+from kotak_neo_adapter import get_quote as neo_get_quote
 from market_registry import MARKETS, canonical_symbol as market_symbol, get_market
 
 CACHE_TTL = 8
@@ -90,7 +91,7 @@ def run_analysis(symbol: str, force=False):
             result = {
                 "status": "NO DATA",
                 "symbol": symbol,
-                "message": "Delta 5m candle data unavailable",
+                "message": "5m candle data unavailable from configured market-data provider",
                 "server_time": time.time(),
             }
             _analysis_cache[symbol] = {"time": time.time(), "result": result}
@@ -183,10 +184,8 @@ def api_live(symbol: str = "BTCUSD", force: bool = False):
     try:
         if market and market.get("provider") == "delta":
             ticker = get_ticker(symbol)
-        elif market and market.get("provider") == "yahoo":
-            # Latest candle is the safe live-market representation for the public index feed.
-            ticker = {"symbol": symbol, "price": analysis.get("price"), "close": analysis.get("price"),
-                      "mark_price": analysis.get("price"), "volume": 0.0, "source": "yahoo_latest_candle"}
+        elif market and market.get("provider") == "kotak_neo":
+            ticker = neo_get_quote(symbol)
         else:
             ticker = None
     except Exception as exc:
@@ -250,6 +249,18 @@ def diagnostics(symbol: str = "BTCUSD"):
     except Exception as exc:
         result["history_error"] = str(exc)
     return _json_safe(result)
+
+
+@app.get("/api/neo-status")
+def neo_status():
+    from kotak_neo_adapter import configured
+    return {
+        "provider": "kotak_neo",
+        "configured": bool(configured()),
+        "consumer_key_present": bool(os.getenv("NEO_CONSUMER_KEY") or os.getenv("KOTAK_CONSUMER_KEY")),
+        "access_token_present": bool(os.getenv("NEO_ACCESS_TOKEN") or os.getenv("KOTAK_ACCESS_TOKEN") or os.getenv("NEO_TOKEN")),
+        "auth_mode": "access_token" if (os.getenv("NEO_ACCESS_TOKEN") or os.getenv("KOTAK_ACCESS_TOKEN") or os.getenv("NEO_TOKEN")) else "totp_optional",
+    }
 
 
 @app.get("/stats")
