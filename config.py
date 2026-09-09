@@ -99,6 +99,22 @@ BACKTEST_LIMIT = 1000
 # ==========================================================
 
 SYMBOLS = [
+    "NIFTY50",
+    "BANKNIFTY",
+    "SENSEX",
+    "NIFTYIT",
+    "GOLD",
+    "SILVER",
+    "CRUDEOIL",
     "BTCUSD",
-    "ETHUSD"
+    "ETHUSD",
 ]
+
+# Kotak Neo market-data credentials. Keep secrets in Render Environment Variables.
+NEO_CONSUMER_KEY = os.getenv("NEO_CONSUMER_KEY", "")
+NEO_ACCESS_TOKEN = os.getenv("NEO_ACCESS_TOKEN", "")
+NEO_MOBILE_NUMBER = os.getenv("NEO_MOBILE_NUMBER", "")
+NEO_UCC = os.getenv("NEO_UCC", "")
+NEO_MPIN = os.getenv("NEO_MPIN", "")
+NEO_TOTP_SECRET = os.getenv("NEO_TOTP_SECRET", "")
+NEO_ENVIRONMENT = os.getenv("NEO_ENVIRONMENT", "prod")
