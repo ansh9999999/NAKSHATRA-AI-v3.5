@@ -5,7 +5,7 @@ import re
 
 from delta import get_option_tickers
 from market_registry import canonical_symbol, get_market
-from kotak_neo_adapter import get_option_chain as neo_get_option_chain
+from kotak_neo_adaptor import get_option_chain as neo_get_option_chain
 
 
 def _num(v, default=0.0):
@@ -75,8 +75,17 @@ def analyze_option_chain(symbol="BTCUSD", spot_price=None):
     symbol=canonical_symbol(symbol); market=get_market(symbol)
     try:
         if market and market.get("provider") == "kotak_neo":
-            payload=neo_get_option_chain(symbol,spot_price)
-            return _analyze_rows(symbol,payload.get("rows",[]),spot_price,payload.get("expiry") or None)
+            # Kotak Neo adaptor returns a list of normalized option-chain rows.
+            # spot_price is used by the analysis engine, not as the adaptor
+            # expiry argument.
+            payload = neo_get_option_chain(symbol)
+            if isinstance(payload, dict):
+                rows = payload.get("rows", [])
+                expiry = payload.get("expiry") or None
+            else:
+                rows = payload or []
+                expiry = None
+            return _analyze_rows(symbol, rows, spot_price, expiry)
         return _delta(symbol,spot_price)
     except Exception as exc:
         return {"status":"ERROR","signal":"NEUTRAL","confidence":0,"reason":str(exc)}
