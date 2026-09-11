@@ -1,41 +1,161 @@
-"""NAKSHATRA market registry and provider routing.
+"""
+NAKSHATRA AI - Central Market Registry
 
-Indian markets are deliberately routed to Kotak Neo; BTC/ETH remain on Delta.
+Crypto:
+    BTCUSD / ETHUSD -> Delta Exchange
+
+Indian markets:
+    NIFTY50 / BANKNIFTY / SENSEX / NIFTYIT / MCX
+    -> Kotak Neo
+
+This file contains no credentials and performs no network calls.
 """
 
 MARKETS = {
-    "BTCUSD": {"asset_class": "CRYPTO", "exchange": "DELTA", "provider": "delta", "option_chain": True},
-    "ETHUSD": {"asset_class": "CRYPTO", "exchange": "DELTA", "provider": "delta", "option_chain": True},
-    "NIFTY50": {"asset_class": "INDEX", "exchange": "NSE", "provider": "kotak_neo", "neo_segment": "nse_cm", "neo_symbols": ["Nifty 50", "NIFTY 50", "NIFTY"], "option_chain": True},
-    "BANKNIFTY": {"asset_class": "INDEX", "exchange": "NSE", "provider": "kotak_neo", "neo_segment": "nse_cm", "neo_symbols": ["Nifty Bank", "BANKNIFTY", "NIFTY BANK"], "option_chain": True},
-    "SENSEX": {"asset_class": "INDEX", "exchange": "BSE", "provider": "kotak_neo", "neo_segment": "bse_cm", "neo_symbols": ["SENSEX", "BSE SENSEX"], "option_chain": True},
-    "NIFTYIT": {"asset_class": "INDEX", "exchange": "NSE", "provider": "kotak_neo", "neo_segment": "nse_cm", "neo_symbols": ["NIFTY IT", "Nifty IT"], "option_chain": False},
-    "GOLD": {"asset_class": "COMMODITY", "exchange": "MCX", "provider": "kotak_neo", "neo_segment": "mcx_fo", "neo_symbols": ["GOLD"], "option_chain": True},
-    "SILVER": {"asset_class": "COMMODITY", "exchange": "MCX", "provider": "kotak_neo", "neo_segment": "mcx_fo", "neo_symbols": ["SILVER"], "option_chain": True},
-    "CRUDEOIL": {"asset_class": "COMMODITY", "exchange": "MCX", "provider": "kotak_neo", "neo_segment": "mcx_fo", "neo_symbols": ["CRUDEOIL", "CRUDE OIL"], "option_chain": True},
+    "BTCUSD": {
+        "name": "Bitcoin",
+        "display": "BTCUSD",
+        "asset_class": "CRYPTO",
+        "exchange": "DELTA",
+        "provider": "delta",
+        "data_symbol": "BTCUSD",
+        "option_chain": False,
+    },
+    "ETHUSD": {
+        "name": "Ethereum",
+        "display": "ETHUSD",
+        "asset_class": "CRYPTO",
+        "exchange": "DELTA",
+        "provider": "delta",
+        "data_symbol": "ETHUSD",
+        "option_chain": False,
+    },
+
+    "NIFTY50": {
+        "name": "NIFTY 50",
+        "display": "NIFTY",
+        "asset_class": "INDEX",
+        "exchange": "NSE",
+        "provider": "kotak_neo",
+        "neo_exchange_segment": "nse_cm",
+        "neo_symbol_candidates": ["NIFTY 50", "NIFTY50", "NIFTY"],
+        "data_symbol": "NIFTY 50",
+        "option_chain": True,
+    },
+    "BANKNIFTY": {
+        "name": "NIFTY BANK",
+        "display": "BANKNIFTY",
+        "asset_class": "INDEX",
+        "exchange": "NSE",
+        "provider": "kotak_neo",
+        "neo_exchange_segment": "nse_cm",
+        "neo_symbol_candidates": ["NIFTY BANK", "BANKNIFTY", "NIFTYBANK"],
+        "data_symbol": "NIFTY BANK",
+        "option_chain": True,
+    },
+    "SENSEX": {
+        "name": "SENSEX",
+        "display": "SENSEX",
+        "asset_class": "INDEX",
+        "exchange": "BSE",
+        "provider": "kotak_neo",
+        "neo_exchange_segment": "bse_cm",
+        "neo_symbol_candidates": ["SENSEX"],
+        "data_symbol": "SENSEX",
+        "option_chain": True,
+    },
+    "NIFTYIT": {
+        "name": "NIFTY IT",
+        "display": "NIFTY IT",
+        "asset_class": "INDEX",
+        "exchange": "NSE",
+        "provider": "kotak_neo",
+        "neo_exchange_segment": "nse_cm",
+        "neo_symbol_candidates": ["NIFTY IT", "NIFTYIT", "CNXIT"],
+        "data_symbol": "NIFTY IT",
+        "option_chain": False,
+    },
+
+    "GOLD": {
+        "name": "Gold",
+        "display": "GOLD",
+        "asset_class": "COMMODITY",
+        "exchange": "MCX",
+        "provider": "kotak_neo",
+        "neo_exchange_segment": "mcx_fo",
+        "neo_symbol_candidates": ["GOLD", "GOLDM"],
+        "data_symbol": "GOLD",
+        "option_chain": True,
+    },
+    "SILVER": {
+        "name": "Silver",
+        "display": "SILVER",
+        "asset_class": "COMMODITY",
+        "exchange": "MCX",
+        "provider": "kotak_neo",
+        "neo_exchange_segment": "mcx_fo",
+        "neo_symbol_candidates": ["SILVER", "SILVERM"],
+        "data_symbol": "SILVER",
+        "option_chain": True,
+    },
+    "CRUDEOIL": {
+        "name": "Crude Oil",
+        "display": "CRUDE OIL",
+        "asset_class": "COMMODITY",
+        "exchange": "MCX",
+        "provider": "kotak_neo",
+        "neo_exchange_segment": "mcx_fo",
+        "neo_symbol_candidates": ["CRUDEOIL", "CRUDE OIL", "CRUDE"],
+        "data_symbol": "CRUDEOIL",
+        "option_chain": True,
+    },
 }
 
 ALIASES = {
-    "NIFTY": "NIFTY50", "NIFTY50": "NIFTY50", "NIFTY 50": "NIFTY50",
-    "BANKNIFTY": "BANKNIFTY", "NIFTYBANK": "BANKNIFTY", "NIFTY BANK": "BANKNIFTY",
-    "SENSEX": "SENSEX", "NIFTYIT": "NIFTYIT", "NIFTY IT": "NIFTYIT",
-    "GOLD": "GOLD", "GOLDM": "GOLD", "SILVER": "SILVER", "SILVERM": "SILVER",
-    "CRUDE": "CRUDEOIL", "CRUDEOIL": "CRUDEOIL", "CRUDE OIL": "CRUDEOIL",
-    "BTC": "BTCUSD", "BTC/USDT": "BTCUSD", "BTC-USDT": "BTCUSD",
-    "ETH": "ETHUSD", "ETH/USDT": "ETHUSD", "ETH-USDT": "ETHUSD",
+    "BTC": "BTCUSD",
+    "BTC/USDT": "BTCUSD",
+    "BTC-USDT": "BTCUSD",
+    "ETH": "ETHUSD",
+    "ETH/USDT": "ETHUSD",
+    "ETH-USDT": "ETHUSD",
+
+    "NIFTY": "NIFTY50",
+    "NIFTY 50": "NIFTY50",
+    "NIFTY50": "NIFTY50",
+    "NIFTY_BANK": "BANKNIFTY",
+    "NIFTY BANK": "BANKNIFTY",
+    "BANK NIFTY": "BANKNIFTY",
+    "BANKNIFTY": "BANKNIFTY",
+    "SENSEX": "SENSEX",
+    "NIFTY_IT": "NIFTYIT",
+    "NIFTY IT": "NIFTYIT",
+    "CNXIT": "NIFTYIT",
+    "NIFTYIT": "NIFTYIT",
+
+    "GOLD": "GOLD",
+    "GOLDM": "GOLD",
+    "SILVER": "SILVER",
+    "SILVERM": "SILVER",
+    "CRUDE": "CRUDEOIL",
+    "CRUDE OIL": "CRUDEOIL",
+    "CRUDEOIL": "CRUDEOIL",
 }
 
 
-def canonical_symbol(symbol, default="NIFTY50"):
-    s = str(symbol or "").strip().upper()
-    if not s or s in {"UNDEFINED", "NULL", "NONE", "NAN"}:
+def canonical_symbol(value, default="NIFTY50"):
+    s = str(value or "").strip().upper()
+    if s in ("", "UNDEFINED", "NULL", "NONE", "NAN"):
         return default
     return ALIASES.get(s, s)
 
 
-def get_market(symbol):
-    return MARKETS.get(canonical_symbol(symbol))
+def get_market(value, default=None):
+    return MARKETS.get(canonical_symbol(value), default)
 
 
-def is_supported(symbol):
-    return canonical_symbol(symbol) in MARKETS
+def is_supported(value):
+    return canonical_symbol(value, default="") in MARKETS
+
+
+def symbols():
+    return list(MARKETS.keys())
