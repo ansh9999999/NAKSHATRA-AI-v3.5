@@ -1,83 +1,236 @@
-"""NAKSHATRA historical candles with provider-aware routing."""
+"""
+NAKSHATRA AI - Provider-aware history layer.
+
+Delta is used ONLY for BTC/ETH.
+Kotak Neo is used for Indian indices and MCX.
+
+Public API kept compatible:
+    get_history(symbol, resolution, limit)
+    get_multi_timeframe_history(symbol, limit)
+"""
+
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
-import requests
+
 import pandas as pd
+import requests
 
 from config import DELTA_BASE_URL
 from logger import logger
 from market_registry import canonical_symbol, get_market
-from kotak_neo_adapter import get_history as neo_get_history
+from kotak_neo import get_history as kotak_get_history
 
-BASE_URL = DELTA_BASE_URL.rstrip("/")
-if not BASE_URL.endswith("/v2"):
-    BASE_URL += "/v2"
-ENDPOINT = f"{BASE_URL}/history/candles"
-TIMEOUT = 20
-RETRIES = 3
-RESOLUTION_SECONDS = {"1m":60,"3m":180,"5m":300,"10m":600,"15m":900,"30m":1800,"1h":3600,"2h":7200,"4h":14400,"6h":21600,"12h":43200,"1d":86400,"1w":604800}
+RESOLUTIONS = ("5m", "15m", "1h", "1d", "1w", "1mo")
+DELTA_RESOLUTIONS = {
+    "5m": 300,
+    "15m": 900,
+    "1h": 3600,
+    "1d": 86400,
+    "1w": 604800,
+    "1mo": 2592000,
+}
+TIMEOUT_SECONDS = 8
+RETRIES = 1
+DEFAULT_LIMIT = 200
+
+_CACHE = {}
+_CACHE_TTL = 8
 
 
 def _empty():
-    df = pd.DataFrame(columns=["open","high","low","close","volume"])
-    df.index = pd.DatetimeIndex([], name="timestamp")
-    return df
+    return pd.DataFrame(
+        columns=["open", "high", "low", "close", "volume"]
+    )
 
 
-def _fetch_delta(symbol, resolution="5m", limit=200):
-    resolution = str(resolution).lower().strip()
-    seconds = RESOLUTION_SECONDS.get(resolution, 300)
-    if resolution not in RESOLUTION_SECONDS:
-        resolution = "5m"
-    try:
-        limit = max(10, min(int(limit), 2000))
-    except Exception:
-        limit = 200
-    end = int(time.time()); end -= end % seconds; start = end - limit * seconds
-    params = {"symbol": symbol, "resolution": resolution, "start": start, "end": end}
-    for attempt in range(1, RETRIES + 1):
+def _delta_endpoint():
+    base = str(DELTA_BASE_URL).rstrip("/")
+    if base.endswith("/v2"):
+        return f"{base}/history/candles"
+    return f"{base}/v2/history/candles"
+
+
+def _fetch_delta_history(symbol, resolution="5m", limit=200):
+    key = ("delta", symbol.upper(), resolution, int(limit))
+    now = time.time()
+
+    cached = _CACHE.get(key)
+    if cached and now - cached[0] < _CACHE_TTL:
+        return cached[1].copy()
+
+    interval_seconds = DELTA_RESOLUTIONS.get(resolution)
+    if interval_seconds is None:
+        logger.warning("Unsupported Delta resolution: %s", resolution)
+        return _empty()
+
+    end = int(time.time())
+    start = end - int(limit) * interval_seconds
+
+    params = {
+        "symbol": symbol.upper(),
+        "resolution": resolution,
+        "start": start,
+        "end": end,
+    }
+
+    last_error = None
+
+    for attempt in range(RETRIES + 1):
         try:
-            r = requests.get(ENDPOINT, params=params, timeout=TIMEOUT, headers={"Accept":"application/json","User-Agent":"NAKSHATRA-AI/5.1"})
-            r.raise_for_status(); payload = r.json()
-            rows = payload.get("result", []) if isinstance(payload, dict) else []
+            response = requests.get(
+                _delta_endpoint(),
+                params=params,
+                timeout=TIMEOUT_SECONDS,
+            )
+            response.raise_for_status()
+
+            payload = response.json()
+            rows = payload.get("result") or []
+
             if not isinstance(rows, list) or not rows:
-                logger.warning("No Delta candle data for %s %s", symbol, resolution); continue
+                raise ValueError(
+                    f"Delta returned no candles for {symbol.upper()} {resolution}"
+                )
+
             df = pd.DataFrame(rows)
-            time_col = "time" if "time" in df.columns else ("timestamp" if "timestamp" in df.columns else None)
-            if time_col is None: continue
-            df["timestamp"] = pd.to_numeric(df[time_col], errors="coerce")
-            sample = df["timestamp"].dropna()
-            if not sample.empty and abs(float(sample.iloc[0])) > 10_000_000_000_000: df["timestamp"] /= 1_000_000
-            elif not sample.empty and abs(float(sample.iloc[0])) > 10_000_000_000: df["timestamp"] /= 1_000
-            for col in ["open","high","low","close","volume"]:
-                if col not in df.columns:
-                    if col == "volume": df[col] = 0.0
-                    else: return _empty()
-                df[col] = pd.to_numeric(df[col], errors="coerce")
-            df.dropna(subset=["timestamp","open","high","low","close"], inplace=True)
-            if df.empty: continue
-            df["timestamp"] = pd.to_datetime(df["timestamp"], unit="s", utc=True, errors="coerce")
-            df.dropna(subset=["timestamp"], inplace=True); df.sort_values("timestamp", inplace=True); df.set_index("timestamp", inplace=True)
-            return df[["open","high","low","close","volume"]]
-        except requests.RequestException as exc:
-            logger.warning("Delta history request failed %s %s attempt=%s: %s", symbol, resolution, attempt, exc)
+
+            if "time" in df.columns and "timestamp" not in df.columns:
+                df.rename(columns={"time": "timestamp"}, inplace=True)
+
+            required = ["timestamp", "open", "high", "low", "close"]
+            if any(col not in df.columns for col in required):
+                raise ValueError(
+                    f"Invalid Delta candle response for {symbol.upper()} {resolution}"
+                )
+
+            for col in ["open", "high", "low", "close", "volume"]:
+                if col in df.columns:
+                    df[col] = pd.to_numeric(df[col], errors="coerce")
+
+            df["timestamp"] = pd.to_datetime(
+                df["timestamp"],
+                unit="s",
+                utc=True,
+                errors="coerce",
+            )
+
+            df.dropna(
+                subset=["timestamp", "open", "high", "low", "close"],
+                inplace=True,
+            )
+            df.sort_values("timestamp", inplace=True)
+            df.drop_duplicates("timestamp", keep="last", inplace=True)
+            df.set_index("timestamp", inplace=True)
+
+            if "volume" not in df.columns:
+                df["volume"] = 0.0
+
+            df = df[["open", "high", "low", "close", "volume"]]
+
+            _CACHE[key] = (time.time(), df.copy())
+
+            logger.info(
+                "HISTORY OK provider=delta symbol=%s tf=%s rows=%s",
+                symbol.upper(),
+                resolution,
+                len(df),
+            )
+            return df
+
         except Exception as exc:
-            logger.exception("Delta history parse failed %s %s: %s", symbol, resolution, exc)
-        if attempt < RETRIES: time.sleep(1)
+            last_error = exc
+            if attempt < RETRIES:
+                time.sleep(0.25)
+
+    logger.warning(
+        "HISTORY FAILED provider=delta symbol=%s tf=%s error=%s",
+        symbol.upper(),
+        resolution,
+        last_error,
+    )
     return _empty()
 
 
 def get_history(symbol="BTCUSD", resolution="5m", limit=200):
-    symbol = canonical_symbol(symbol)
-    market = get_market(symbol)
+    canonical = canonical_symbol(symbol)
+    market = get_market(canonical)
+
+    if not market:
+        logger.warning("Unsupported market: %s", symbol)
+        return _empty()
+
+    provider = market.get("provider")
+
+    if provider == "delta":
+        return _fetch_delta_history(canonical, resolution, limit)
+
+    if provider == "kotak_neo":
+        key = ("kotak", canonical, resolution, int(limit))
+        now = time.time()
+        cached = _CACHE.get(key)
+        if cached and now - cached[0] < _CACHE_TTL:
+            return cached[1].copy()
+
+        df = kotak_get_history(canonical, resolution, limit)
+
+        if df is not None and not df.empty:
+            _CACHE[key] = (time.time(), df.copy())
+            logger.info(
+                "HISTORY OK provider=kotak_neo symbol=%s tf=%s rows=%s",
+                canonical,
+                resolution,
+                len(df),
+            )
+            return df
+
+        logger.warning(
+            "HISTORY FAILED provider=kotak_neo symbol=%s tf=%s",
+            canonical,
+            resolution,
+        )
+        return _empty()
+
+    logger.warning(
+        "No history provider configured for %s (provider=%s)",
+        canonical,
+        provider,
+    )
+    return _empty()
+
+
+def get_multi_timeframe_history(symbol, limit=DEFAULT_LIMIT):
+    canonical = canonical_symbol(symbol)
+    result = {tf: _empty() for tf in RESOLUTIONS}
+
+    # For Indian markets only the four timeframes used by the signal engine
+    # are requested. Crypto keeps the original extended set.
+    market = get_market(canonical)
     if market and market.get("provider") == "kotak_neo":
-        try:
-            return neo_get_history(symbol, resolution, limit)
-        except Exception as exc:
-            logger.exception("Kotak Neo history failed %s %s: %s", symbol, resolution, exc)
-            return _empty()
-    return _fetch_delta(symbol, resolution, limit)
+        resolutions = ("5m", "15m", "1h", "1d")
+    else:
+        resolutions = RESOLUTIONS
 
+    with ThreadPoolExecutor(max_workers=len(resolutions)) as pool:
+        jobs = {
+            pool.submit(
+                get_history,
+                canonical,
+                tf,
+                limit,
+            ): tf
+            for tf in resolutions
+        }
 
-def get_multi_timeframe_history(symbol="BTCUSD", limit=200):
-    symbol = canonical_symbol(symbol)
-    return {"symbol": symbol, "5m": get_history(symbol,"5m",limit), "15m": get_history(symbol,"15m",limit), "1h": get_history(symbol,"1h",limit), "1d": get_history(symbol,"1d",limit)}
+        for job in as_completed(jobs):
+            tf = jobs[job]
+            try:
+                result[tf] = job.result()
+            except Exception:
+                logger.exception(
+                    "TIMEFRAME ERROR symbol=%s tf=%s",
+                    canonical,
+                    tf,
+                )
+                result[tf] = _empty()
+
+    return result
