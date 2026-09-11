@@ -1,104 +1,91 @@
 """
-NAKSHATRA AI
-Configuration
+NAKSHATRA AI - Configuration
+Kotak Neo integration keeps Indian markets separate from Delta crypto.
 """
 
 import os
 
-# ==========================================================
-# PROJECT
-# ==========================================================
-
 PROJECT_NAME = "NAKSHATRA AI"
-
-VERSION = "5.0"
-
-# ==========================================================
-# BROKER
-# ==========================================================
-
-# paper
-# delta
+VERSION = "5.2"
 
 BROKER_TYPE = "paper"
 
-# ==========================================================
-# DELTA EXCHANGE
-# ==========================================================
-
+# Delta Exchange - BTC/ETH only
 DELTA_BASE_URL = "https://api.india.delta.exchange"
-
 DELTA_API_KEY = os.getenv("DELTA_API_KEY", "")
-
 DELTA_API_SECRET = os.getenv("DELTA_API_SECRET", "")
 
-# ==========================================================
-# TELEGRAM
-# ==========================================================
-
-TELEGRAM_BOT_TOKEN = os.getenv(
-    "TELEGRAM_BOT_TOKEN",
-    ""
+# Kotak Neo - Indian market data
+# The adapter accepts the KOTAK_* names used by NAKSHATRA and a few
+# official NEO_* aliases for compatibility.
+KOTAK_CONSUMER_KEY = (
+    os.getenv("KOTAK_CONSUMER_KEY")
+    or os.getenv("KOTAK_API_KEY")
+    or os.getenv("NEO_CONSUMER_KEY")
+    or ""
 )
 
-TELEGRAM_CHAT_ID = os.getenv(
-    "TELEGRAM_CHAT_ID",
-    ""
+KOTAK_ACCESS_TOKEN = (
+    os.getenv("KOTAK_ACCESS_TOKEN")
+    or os.getenv("NEO_ACCESS_TOKEN")
+    or ""
 )
 
-# ==========================================================
-# NTFY
-# ==========================================================
-
-NTFY_TOPIC = os.getenv(
-    "NTFY_TOPIC",
-    "nakshatra-ai"
+KOTAK_MOBILE_NUMBER = (
+    os.getenv("KOTAK_MOBILE_NUMBER")
+    or os.getenv("KOTAK_MOBILE")
+    or os.getenv("NEO_MOBILE_NUMBER")
+    or ""
 )
 
-# ==========================================================
-# DATABASE
-# ==========================================================
+KOTAK_UCC = (
+    os.getenv("KOTAK_UCC")
+    or os.getenv("NEO_UCC")
+    or ""
+)
 
+KOTAK_MPIN = (
+    os.getenv("KOTAK_MPIN")
+    or os.getenv("NEO_MPIN")
+    or ""
+)
+
+# Optional. Only needed if unattended TOTP login is configured.
+# Never expose this value in logs or source control.
+KOTAK_TOTP_SECRET = (
+    os.getenv("KOTAK_TOTP_SECRET")
+    or os.getenv("NEO_TOTP_SECRET")
+    or ""
+)
+
+KOTAK_ENVIRONMENT = os.getenv("KOTAK_ENVIRONMENT", "prod")
+KOTAK_NEO_FIN_KEY = os.getenv("KOTAK_NEO_FIN_KEY", "neotradeapi")
+
+# Notifications
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
+NTFY_TOPIC = os.getenv("NTFY_TOPIC", "nakshatra-ai")
+
+# Database / scanner
 DATABASE_NAME = "trades.db"
-
-# ==========================================================
-# SCANNER
-# ==========================================================
-
 SCAN_INTERVAL = 5
-
 MONITOR_INTERVAL = 1
-
 MAX_HOLD_CANDLES = 20
 
-# ==========================================================
-# RISK MANAGEMENT
-# ==========================================================
-
+# Risk
 STARTING_CAPITAL = 100000
-
 RISK_PER_TRADE = 2
-
 MAX_OPEN_TRADES = 5
-
 ATR_MULTIPLIER = 2
-
 MIN_RISK_REWARD = 2
 
-# ==========================================================
-# BACKTEST
-# ==========================================================
-
+# Backtest
 BACKTEST_LIMIT = 1000
 
-# ==========================================================
-# SYMBOLS
-# ==========================================================
-# ==========================================================
-# SYMBOLS
-# ==========================================================
-
+# Scanner markets. BTC/ETH and Indian markets remain provider-separated.
 SYMBOLS = [
+    "BTCUSD",
+    "ETHUSD",
     "NIFTY50",
     "BANKNIFTY",
     "SENSEX",
@@ -106,15 +93,4 @@ SYMBOLS = [
     "GOLD",
     "SILVER",
     "CRUDEOIL",
-    "BTCUSD",
-    "ETHUSD",
 ]
-
-# Kotak Neo market-data credentials. Keep secrets in Render Environment Variables.
-NEO_CONSUMER_KEY = os.getenv("NEO_CONSUMER_KEY", "")
-NEO_ACCESS_TOKEN = os.getenv("NEO_ACCESS_TOKEN", "")
-NEO_MOBILE_NUMBER = os.getenv("NEO_MOBILE_NUMBER", "")
-NEO_UCC = os.getenv("NEO_UCC", "")
-NEO_MPIN = os.getenv("NEO_MPIN", "")
-NEO_TOTP_SECRET = os.getenv("NEO_TOTP_SECRET", "")
-NEO_ENVIRONMENT = os.getenv("NEO_ENVIRONMENT", "prod")
