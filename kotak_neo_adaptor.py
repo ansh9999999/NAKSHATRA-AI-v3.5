@@ -1,47 +1,38 @@
-"""Kotak Neo v3.0.x market-data adapter for NAKSHATRA.
+"""NAKSHATRA AI - Kotak Neo market-data adapter.
 
-READ-ONLY market data only. No order-placement calls are made here.
-Credentials are read from environment variables; never hard-code secrets.
+Read-only market-data adapter for Indian markets.  It intentionally does not
+place, modify or cancel orders.
+
+The adapter uses the current Kotak Neo Python SDK (kotakneoapi / NeoAPI).
+Consumer-key-only market-data calls are preferred; TOTP/MPIN are only used
+when the SDK endpoint requires an authenticated session.
 """
+
 from __future__ import annotations
 
+import io
 import inspect
 import os
 import re
 import threading
 from datetime import datetime, timedelta, timezone
-from zoneinfo import ZoneInfo
+from typing import Any
 
 import pandas as pd
-
-from logger import logger
-
-try:
-    from neo_api_client import NeoAPI
-except Exception as exc:  # package is installed by Render from requirements.txt
-    NeoAPI = None
-    _IMPORT_ERROR = exc
-else:
-    _IMPORT_ERROR = None
+import requests
 
 try:
-    import pyotp
-except Exception:
-    pyotp = None
-
-IST = ZoneInfo("Asia/Kolkata")
-_CLIENT = None
-_CLIENT_LOCK = threading.Lock()
-_INSTRUMENT_CACHE = {}
-
-INTERVALS = {
-    "1m": "1minute", "3m": "3minute", "5m": "5minute", "10m": "10minute",
-    "15m": "15minute", "30m": "30minute", "1h": "60minute", "2h": "120minute",
-    "4h": "240minute", "1d": "day",
-}
+    from logger import logger
+except Exception:  # pragma: no cover
+    import logging
+    logger = logging.getLogger("nakshatra")
 
 
-def _env(*names):
+# ---------------------------------------------------------------------------
+# Environment helpers
+# ---------------------------------------------------------------------------
+
+def _env(*names: str) -> str:
     for name in names:
         value = os.getenv(name, "").strip()
         if value:
@@ -49,371 +40,458 @@ def _env(*names):
     return ""
 
 
-def configured():
-    return bool(_env("NEO_CONSUMER_KEY", "KOTAK_CONSUMER_KEY"))
+CONSUMER_KEY = _env("KOTAK_CONSUMER_KEY", "KOTAK_ACCESS_TOKEN", "NEO_CONSUMER_KEY")
+MOBILE_NUMBER = _env("KOTAK_MOBILE_NUMBER", "NEO_MOBILE_NUMBER")
+UCC = _env("KOTAK_UCC", "NEO_UCC")
+MPIN = _env("KOTAK_MPIN", "NEO_MPIN")
+TOTP_SECRET = _env("KOTAK_TOTP_SECRET", "NEO_TOTP_SECRET")
+
+# Optional explicit token mappings.  These make deployment deterministic if
+# the user's account has a known token and avoid downloading the scrip master.
+_TOKEN_ENV = {
+    "NIFTY50": ("KOTAK_NIFTY50_TOKEN", "NEO_NIFTY50_TOKEN"),
+    "BANKNIFTY": ("KOTAK_BANKNIFTY_TOKEN", "NEO_BANKNIFTY_TOKEN"),
+    "SENSEX": ("KOTAK_SENSEX_TOKEN", "NEO_SENSEX_TOKEN"),
+    "NIFTYIT": ("KOTAK_NIFTYIT_TOKEN", "NEO_NIFTYIT_TOKEN"),
+    "GOLD": ("KOTAK_GOLD_TOKEN", "NEO_GOLD_TOKEN"),
+    "SILVER": ("KOTAK_SILVER_TOKEN", "NEO_SILVER_TOKEN"),
+    "CRUDEOIL": ("KOTAK_CRUDEOIL_TOKEN", "NEO_CRUDEOIL_TOKEN"),
+}
+
+# Exchange segment used by the read-only quote/historical endpoints.
+_SEGMENT = {
+    "NIFTY50": "nse_cm",
+    "BANKNIFTY": "nse_cm",
+    "SENSEX": "bse_cm",
+    "NIFTYIT": "nse_cm",
+    "GOLD": "mcx_fo",
+    "SILVER": "mcx_fo",
+    "CRUDEOIL": "mcx_fo",
+}
+
+# Common display/scrip-master names.  The resolver also performs fuzzy
+# matching, because Kotak's daily scrip-master can change display formatting.
+_NAMES = {
+    "NIFTY50": ("NIFTY 50", "NIFTY50", "NIFTY"),
+    "BANKNIFTY": ("NIFTY BANK", "BANKNIFTY", "NIFTYBANK"),
+    "SENSEX": ("SENSEX",),
+    "NIFTYIT": ("NIFTY IT", "NIFTYIT", "CNX IT"),
+    "GOLD": ("GOLD",),
+    "SILVER": ("SILVER",),
+    "CRUDEOIL": ("CRUDEOIL", "CRUDE OIL", "CRUDE"),
+}
 
 
-def _client():
+_CLIENT = None
+_CLIENT_LOCK = threading.Lock()
+_SCRIP_DF: dict[str, pd.DataFrame] = {}
+_SCRIP_LOCK = threading.Lock()
+
+
+def _sdk_client():
+    """Create/reuse the current Kotak Neo client."""
     global _CLIENT
     if _CLIENT is not None:
         return _CLIENT
-    if NeoAPI is None:
-        raise RuntimeError(f"kotakneoapi is not installed: {_IMPORT_ERROR}")
-
-    consumer_key = _env("NEO_CONSUMER_KEY", "KOTAK_CONSUMER_KEY")
-    if not consumer_key:
-        raise RuntimeError("NEO_CONSUMER_KEY is not configured")
-
-    environment = _env("NEO_ENVIRONMENT", "KOTAK_ENVIRONMENT") or "prod"
-    access_token = _env("NEO_ACCESS_TOKEN", "KOTAK_ACCESS_TOKEN", "NEO_TOKEN")
-
-    kwargs = {"consumer_key": consumer_key, "environment": environment}
-    if access_token:
-        kwargs["access_token"] = access_token
+    if not CONSUMER_KEY:
+        raise RuntimeError("KOTAK_CONSUMER_KEY is not configured")
 
     with _CLIENT_LOCK:
-        if _CLIENT is None:
-            _CLIENT = NeoAPI(**kwargs)
-            # Optional unattended authentication path. The preferred Render setup
-            # is a valid access token; TOTP login is used only when configured.
-            _maybe_login(_CLIENT)
-    return _CLIENT
-
-
-def _maybe_login(client):
-    if _env("NEO_ACCESS_TOKEN", "KOTAK_ACCESS_TOKEN", "NEO_TOKEN"):
-        return
-    mobile = _env("NEO_MOBILE_NUMBER", "KOTAK_MOBILE_NUMBER")
-    ucc = _env("NEO_UCC", "KOTAK_UCC")
-    mpin = _env("NEO_MPIN", "KOTAK_MPIN")
-    totp_secret = _env("NEO_TOTP_SECRET", "KOTAK_TOTP_SECRET")
-    if not (mobile and ucc and mpin and totp_secret and pyotp):
-        return
-    code = pyotp.TOTP(totp_secret).now()
-    client.totp_login(mobile_number=mobile, ucc=ucc, totp=code)
-    client.totp_validate(mpin=mpin)
-
-
-def _flatten_dicts(value):
-    """Yield dictionaries from common Neo response envelopes."""
-    if isinstance(value, dict):
-        yield value
-        for v in value.values():
-            yield from _flatten_dicts(v)
-    elif isinstance(value, list):
-        for item in value:
-            yield from _flatten_dicts(item)
-
-
-def _first(row, *keys):
-    for key in keys:
-        if key in row and row[key] not in (None, "", "-", "NA"):
-            return row[key]
-    return None
-
-
-def _float(value, default=None):
-    try:
-        return float(value)
-    except Exception:
-        return default
-
-
-def _token_from_row(row):
-    value = _first(row, "instrument_token", "pSymbol", "pSymbolToken", "token", "exchange_token")
-    return str(value) if value not in (None, "") else None
-
-
-def _segment_from_row(row, fallback):
-    return str(_first(row, "exchange_segment", "pExchSeg", "exchange") or fallback).lower()
-
-
-def _trading_symbol(row):
-    return str(_first(row, "trading_symbol", "pTrdSymbol", "display_symbol", "pScripRefKey", "symbol") or "")
-
-
-def _parse_expiry(value):
-    if value in (None, "", -1, "-1"):
-        return None
-    if isinstance(value, (int, float)):
+        if _CLIENT is not None:
+            return _CLIENT
         try:
-            x = float(value)
-            # Neo master may use Unix seconds.
-            if x > 1_000_000_000:
-                return datetime.fromtimestamp(x, tz=timezone.utc).date()
-        except Exception:
-            pass
-    text = str(value).strip()
-    for fmt in ("%d-%m-%Y", "%Y-%m-%d", "%d/%m/%Y", "%d%b%Y", "%d%b%y", "%d%m%Y", "%d%m%y"):
-        try:
-            return datetime.strptime(text.upper(), fmt).date()
-        except Exception:
-            continue
-    return None
-
-
-def find_instrument(symbol):
-    """Resolve a registry symbol to a Neo instrument token/segment."""
-    from market_registry import get_market, canonical_symbol
-
-    canonical = canonical_symbol(symbol)
-    if canonical in _INSTRUMENT_CACHE:
-        return _INSTRUMENT_CACHE[canonical]
-
-    market = get_market(canonical)
-    if not market or market.get("provider") != "kotak_neo":
-        return None
-
-    client = _client()
-    segment = market["neo_segment"]
-    candidates = market.get("neo_symbols", [canonical])
-    rows = []
-    for candidate in candidates:
-        try:
-            result = client.search_scrip(
-                exchange_segment=segment,
-                symbol=candidate,
-                expiry="",
-                option_type="",
-                strike_price="",
-            )
-            rows = [r for r in _flatten_dicts(result) if _token_from_row(r)]
-            if rows:
-                break
+            from neo_api_client import NeoAPI
         except Exception as exc:
-            logger.warning("Neo search_scrip failed %s/%s: %s", canonical, candidate, exc)
+            raise RuntimeError(
+                "kotakneoapi is not installed; add kotakneoapi to requirements.txt"
+            ) from exc
 
-    if not rows:
-        raise RuntimeError(f"Kotak Neo instrument not found for {canonical} ({segment})")
-
-    # For MCX we prefer the nearest non-expired futures contract. For indices/cash,
-    # prefer the first exact/closest symbol returned by the master.
-    if segment == "mcx_fo":
-        today = datetime.now(IST).date()
-        candidates_rows = []
-        for row in rows:
-            expiry = _parse_expiry(_first(row, "pExpiryDate", "expiry", "expiry_date", "lExpiryDate"))
-            if expiry and expiry >= today:
-                candidates_rows.append((expiry, row))
-        if candidates_rows:
-            row = sorted(candidates_rows, key=lambda x: x[0])[0][1]
-        else:
-            row = rows[0]
-    else:
-        row = rows[0]
-
-    info = {
-        "symbol": canonical,
-        "instrument_token": _token_from_row(row),
-        "exchange_segment": _segment_from_row(row, segment),
-        "trading_symbol": _trading_symbol(row),
-        "raw": row,
-    }
-    _INSTRUMENT_CACHE[canonical] = info
-    logger.info("Neo instrument resolved %s -> %s/%s", canonical, info["exchange_segment"], info["instrument_token"])
-    return info
+        _CLIENT = NeoAPI(consumer_key=CONSUMER_KEY, environment="prod")
+        return _CLIENT
 
 
-def _quote_rows(response):
-    rows = []
-    for row in _flatten_dicts(response):
-        if any(k in row for k in ("ltp", "LTP", "last_price", "last_traded_price", "display_symbol", "exchange_token")):
-            rows.append(row)
-    return rows
+def _maybe_auth(client) -> None:
+    """Authenticate only if all required values are available.
 
+    Current Kotak market-data quotes/scrip-master endpoints can work with the
+    consumer key alone.  Historical/option endpoints may require a session on
+    some account/API configurations, so authenticate lazily when credentials
+    are available.
+    """
+    if not (MOBILE_NUMBER and UCC and MPIN):
+        return
 
-def get_quote(symbol):
-    info = find_instrument(symbol)
-    client = _client()
-    response = client.quotes(
-        instrument_tokens=[{
-            "instrument_token": info["instrument_token"],
-            "exchange_segment": info["exchange_segment"],
-        }],
-        quote_type="all",
-    )
-    rows = _quote_rows(response)
-    row = rows[0] if rows else next(iter(_flatten_dicts(response)), {})
-    ltp = _float(_first(row, "ltp", "LTP", "last_price", "last_traded_price"))
-    ohlc = _first(row, "ohlc", "OHLC") or {}
-    close = _float(_first(ohlc, "close", "Close", "pClose"), ltp)
-    return {
-        "symbol": symbol,
-        "price": ltp,
-        "close": close,
-        "mark_price": ltp,
-        "volume": _float(_first(row, "last_volume", "volume", "vtt"), 0.0),
-        "change": _float(_first(row, "change", "net_change")),
-        "change_percent": _float(_first(row, "per_change", "percent_change")),
-        "source": "kotak_neo",
-        "instrument": info,
-        "raw": row,
-    }
+    # Avoid repeated login if the SDK exposes a session/auth marker.
+    for attr in ("access_token", "session_token", "sessionToken"):
+        if getattr(client, attr, None):
+            return
 
+    # If no TOTP secret is available, don't invent a code.  Quotes can still
+    # be used with consumer-key authentication.
+    if not TOTP_SECRET:
+        return
 
-def _call_by_signature(client, method_name, context):
-    method = getattr(client, method_name)
-    sig = inspect.signature(method)
-    kwargs = {}
-    for name, param in sig.parameters.items():
-        if name == "self":
-            continue
-        if name in context:
-            kwargs[name] = context[name]
-    missing = [name for name, p in sig.parameters.items() if name != "self" and p.default is inspect._empty and name not in kwargs]
-    if missing:
-        raise RuntimeError(f"Kotak Neo {method_name} requires unsupported parameters: {missing}")
-    return method(**kwargs)
-
-
-def _extract_candle_rows(response):
-    # Recursively locate lists of dicts that look like candle records.
-    candidates = []
-    if isinstance(response, list):
-        candidates.append(response)
-    elif isinstance(response, dict):
-        for key in ("data", "candles", "result", "records"):
-            value = response.get(key)
-            if isinstance(value, list):
-                candidates.append(value)
-            elif isinstance(value, dict):
-                for subkey in ("data", "candles", "records"):
-                    if isinstance(value.get(subkey), list):
-                        candidates.append(value[subkey])
-    for rows in candidates:
-        if rows and any(isinstance(x, (dict, list, tuple)) for x in rows):
-            return rows
-    return []
-
-
-def _normalize_candles(response):
-    rows = _extract_candle_rows(response)
-    out = []
-    for item in rows:
-        if isinstance(item, dict):
-            ts = _first(item, "timestamp", "time", "datetime", "date", "t")
-            o = _first(item, "open", "Open", "o")
-            h = _first(item, "high", "High", "h")
-            l = _first(item, "low", "Low", "l")
-            c = _first(item, "close", "Close", "c")
-            v = _first(item, "volume", "Volume", "v", "vol")
-        elif isinstance(item, (list, tuple)) and len(item) >= 5:
-            ts, o, h, l, c = item[:5]
-            v = item[5] if len(item) > 5 else 0
-        else:
-            continue
-        out.append({"timestamp": ts, "open": _float(o), "high": _float(h), "low": _float(l), "close": _float(c), "volume": _float(v, 0.0)})
-    if not out:
-        return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
-    df = pd.DataFrame(out)
-    numeric = ["open", "high", "low", "close", "volume"]
-    for col in numeric:
-        df[col] = pd.to_numeric(df[col], errors="coerce")
-    ts = pd.to_datetime(df["timestamp"], errors="coerce", utc=True)
-    # Numeric epoch fallback.
-    bad = ts.isna()
-    if bad.any():
-        nums = pd.to_numeric(df.loc[bad, "timestamp"], errors="coerce")
-        df.loc[bad, "timestamp"] = pd.to_datetime(nums, unit="s", errors="coerce", utc=True)
-    df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce", utc=True)
-    df.dropna(subset=["timestamp", "open", "high", "low", "close"], inplace=True)
-    df.sort_values("timestamp", inplace=True)
-    df.drop_duplicates("timestamp", keep="last", inplace=True)
-    return df.set_index("timestamp")[["open", "high", "low", "close", "volume"]]
-
-
-def get_history(symbol, resolution="5m", limit=200):
-    info = find_instrument(symbol)
-    client = _client()
-    interval = INTERVALS.get(str(resolution).lower().strip(), "5minute")
     try:
-        n = max(10, min(int(limit), 2000))
-    except Exception:
-        n = 200
-    seconds = {"1minute": 60, "3minute": 180, "5minute": 300, "10minute": 600, "15minute": 900, "30minute": 1800, "60minute": 3600, "120minute": 7200, "240minute": 14400, "day": 86400}.get(interval, 300)
-    end = datetime.now(IST)
-    start = end - timedelta(seconds=seconds * n * 1.25)
-    context = {
-        "exchange_segment": info["exchange_segment"],
-        "instrument_token": info["instrument_token"],
-        "from_date": start.strftime("%Y-%m-%d %H:%M:%S"),
-        "to_date": end.strftime("%Y-%m-%d %H:%M:%S"),
-        "start_date": start.strftime("%Y-%m-%d %H:%M:%S"),
-        "end_date": end.strftime("%Y-%m-%d %H:%M:%S"),
-        "interval": interval,
+        import pyotp
+        totp = pyotp.TOTP(TOTP_SECRET).now()
+        client.totp_login(mobile_number=MOBILE_NUMBER, ucc=UCC, totp=totp)
+        client.totp_validate(mpin=MPIN)
+    except Exception as exc:
+        logger.warning("Kotak Neo optional session authentication failed: %s", exc)
+
+
+def _clean_symbol(symbol: str) -> str:
+    s = str(symbol or "").strip().upper()
+    aliases = {
+        "NIFTY": "NIFTY50",
+        "NIFTY 50": "NIFTY50",
+        "NIFTY50": "NIFTY50",
+        "BANK NIFTY": "BANKNIFTY",
+        "NIFTY BANK": "BANKNIFTY",
+        "BANKNIFTY": "BANKNIFTY",
+        "SENSEX": "SENSEX",
+        "NIFTY IT": "NIFTYIT",
+        "CNXIT": "NIFTYIT",
+        "NIFTYIT": "NIFTYIT",
+        "GOLD": "GOLD",
+        "SILVER": "SILVER",
+        "CRUDE": "CRUDEOIL",
+        "CRUDE OIL": "CRUDEOIL",
+        "CRUDEOIL": "CRUDEOIL",
     }
-    response = _call_by_signature(client, "historical_data", context)
-    df = _normalize_candles(response)
-    if len(df) > n:
-        df = df.tail(n)
+    return aliases.get(s, s)
+
+
+def _token_from_env(symbol: str) -> str:
+    for name in _TOKEN_ENV.get(symbol, ()):
+        value = os.getenv(name, "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _find_col(df: pd.DataFrame, *wanted: str) -> str | None:
+    normalized = {re.sub(r"[^a-z0-9]", "", str(c).lower()): c for c in df.columns}
+    for w in wanted:
+        key = re.sub(r"[^a-z0-9]", "", w.lower())
+        if key in normalized:
+            return normalized[key]
+    return None
+
+
+def _scrip_master(symbol: str) -> pd.DataFrame:
+    segment = _SEGMENT[symbol]
+    with _SCRIP_LOCK:
+        if segment in _SCRIP_DF:
+            return _SCRIP_DF[segment]
+
+    client = _sdk_client()
+    response = client.scrip_master(exchange_segment=segment)
+    url = None
+    if isinstance(response, str):
+        url = response
+    elif isinstance(response, dict):
+        # New SDK returns a list of exact daily file paths.
+        paths = response.get("filesPaths") or response.get("files_paths") or []
+        base = response.get("baseFolder", "")
+        candidates = [p for p in paths if segment in str(p).lower()]
+        if candidates:
+            url = candidates[0]
+        elif base:
+            url = str(base).rstrip("/") + "/" + segment + ".csv"
+
+    if not url:
+        raise RuntimeError(f"Kotak scrip master URL unavailable for {segment}")
+
+    r = requests.get(url, timeout=30, headers={"User-Agent": "NAKSHATRA-AI/5.0"})
+    r.raise_for_status()
+    df = pd.read_csv(io.BytesIO(r.content), low_memory=False)
+    with _SCRIP_LOCK:
+        _SCRIP_DF[segment] = df
     return df
 
 
-def _normalize_option_rows(response):
-    rows = []
-    for item in _flatten_dicts(response):
-        strike = _float(_first(item, "strike_price", "strikePrice", "strike", "dStrikePrice", "pStrikePrice"))
-        if strike is None:
-            continue
-        option_type = str(_first(item, "option_type", "optionType", "pOptionType", "type", "instrument_type") or "").upper()
-        if option_type in {"CE", "CALL", "C"}:
-            option_type = "CALL"
-        elif option_type in {"PE", "PUT", "P"}:
-            option_type = "PUT"
-        else:
-            sym = str(_first(item, "trading_symbol", "pTrdSymbol", "symbol") or "").upper()
-            option_type = "CALL" if "CE" in sym else "PUT" if "PE" in sym else ""
-        if not option_type:
-            continue
-        rows.append({
-            "symbol": _first(item, "trading_symbol", "pTrdSymbol", "symbol", "display_symbol"),
-            "type": option_type,
-            "strike": strike,
-            "oi": _float(_first(item, "oi", "open_interest", "openInterest", "dOpenInterest"), 0.0),
-            "volume": _float(_first(item, "volume", "last_volume", "vtt"), 0.0),
-            "ltp": _float(_first(item, "ltp", "last_price", "last_traded_price")),
-        })
-    # de-duplicate by symbol/strike/type
-    seen = set(); clean = []
-    for row in rows:
-        key = (row.get("symbol"), row["type"], row["strike"])
-        if key not in seen:
-            seen.add(key); clean.append(row)
-    return clean
+def _resolve_instrument(symbol: str) -> tuple[str, str]:
+    """Return (exchange_segment, instrument_token)."""
+    symbol = _clean_symbol(symbol)
+    segment = _SEGMENT.get(symbol)
+    if not segment:
+        raise ValueError(f"Unsupported Kotak Neo symbol: {symbol}")
+
+    explicit = _token_from_env(symbol)
+    if explicit:
+        return segment, explicit
+
+    df = _scrip_master(symbol)
+    name_col = _find_col(
+        df, "display_symbol", "symbol", "trading_symbol", "pSymbol", "pTrdSymbol", "symbol_name"
+    )
+    token_col = _find_col(
+        df, "instrument_token", "token", "pSymbolToken", "pScripCode", "exchange_token"
+    )
+    if not name_col or not token_col:
+        raise RuntimeError(
+            f"Kotak scrip master columns not recognised for {symbol}: {list(df.columns)[:20]}"
+        )
+
+    names = [re.sub(r"[^A-Z0-9]", "", n.upper()) for n in _NAMES[symbol]]
+    values = df[name_col].astype(str).str.upper().map(lambda x: re.sub(r"[^A-Z0-9]", "", x))
+
+    # Prefer exact matches, then contains matches.
+    for target in names:
+        exact = df[values == target]
+        if not exact.empty:
+            return segment, str(exact.iloc[0][token_col])
+    for target in names:
+        hit = df[values.str.contains(target, regex=False, na=False)]
+        if not hit.empty:
+            return segment, str(hit.iloc[0][token_col])
+
+    raise RuntimeError(f"Kotak instrument token not found for {symbol}")
 
 
-def get_option_chain(symbol, spot_price=None):
-    info = find_instrument(symbol)
-    client = _client()
-    today = datetime.now(IST).date()
-    expiry = ""
-    # Prefer a live expiry if the SDK exposes expiries(); signature differences are
-    # handled in the same defensive way as historical_data().
-    if hasattr(client, "expiries"):
+def _extract_list(payload: Any) -> list[Any]:
+    if isinstance(payload, list):
+        return payload
+    if isinstance(payload, dict):
+        for key in ("data", "Data", "result", "results", "records"):
+            value = payload.get(key)
+            if isinstance(value, list):
+                return value
+            if isinstance(value, dict):
+                nested = _extract_list(value)
+                if nested:
+                    return nested
+    return []
+
+
+def _call_with_variants(fn, variants: list[dict[str, Any]]):
+    """Call an SDK method against known v3 signature variants."""
+    last_type_error = None
+    for kwargs in variants:
         try:
-            response = _call_by_signature(client, "expiries", {
-                "exchange_segment": info["exchange_segment"],
-                "instrument_token": info["instrument_token"],
-                "symbol": info.get("trading_symbol", ""),
-            })
-            values = []
-            for row in _flatten_dicts(response):
-                for key in ("expiry", "expiry_date", "pExpiryDate"):
-                    d = _parse_expiry(row.get(key))
-                    if d and d >= today:
-                        values.append(d)
-            if values:
-                expiry = min(values).strftime("%d-%m-%Y")
-        except Exception as exc:
-            logger.warning("Neo expiry lookup failed %s: %s", symbol, exc)
+            return fn(**kwargs)
+        except TypeError as exc:
+            last_type_error = exc
+            continue
+    if last_type_error:
+        raise last_type_error
+    raise RuntimeError("No valid SDK call variant")
 
-    context = {
-        "exchange_segment": info["exchange_segment"],
-        "instrument_token": info["instrument_token"],
-        "underlying_token": info["instrument_token"],
-        "scrip_token": info["instrument_token"],
-        "expiry": expiry,
+
+def _normalise_candles(payload: Any) -> pd.DataFrame:
+    rows = _extract_list(payload)
+    if not rows:
+        return pd.DataFrame(columns=["open", "high", "low", "close", "volume"],
+                            index=pd.DatetimeIndex([], name="timestamp"))
+
+    # Some broker responses use lists in fixed OHLCV order.
+    if rows and isinstance(rows[0], (list, tuple)):
+        rows = [
+            {
+                "timestamp": r[0] if len(r) > 0 else None,
+                "open": r[1] if len(r) > 1 else None,
+                "high": r[2] if len(r) > 2 else None,
+                "low": r[3] if len(r) > 3 else None,
+                "close": r[4] if len(r) > 4 else None,
+                "volume": r[5] if len(r) > 5 else 0,
+            }
+            for r in rows
+        ]
+
+    df = pd.DataFrame(rows)
+    if df.empty:
+        return df
+
+    def col(*names):
+        return _find_col(df, *names)
+
+    t = col("timestamp", "time", "datetime", "date", "timeStamp")
+    o = col("open", "openPrice", "o")
+    h = col("high", "highPrice", "h")
+    l = col("low", "lowPrice", "l")
+    c = col("close", "closePrice", "c")
+    v = col("volume", "vol", "v")
+    if not all((t, o, h, l, c)):
+        return pd.DataFrame(columns=["open", "high", "low", "close", "volume"],
+                            index=pd.DatetimeIndex([], name="timestamp"))
+
+    out = pd.DataFrame({
+        "timestamp": df[t],
+        "open": pd.to_numeric(df[o], errors="coerce"),
+        "high": pd.to_numeric(df[h], errors="coerce"),
+        "low": pd.to_numeric(df[l], errors="coerce"),
+        "close": pd.to_numeric(df[c], errors="coerce"),
+        "volume": pd.to_numeric(df[v], errors="coerce") if v else 0.0,
+    })
+    # Handle unix seconds/milliseconds and normal date strings.
+    numeric_t = pd.to_numeric(out["timestamp"], errors="coerce")
+    if numeric_t.notna().mean() > 0.8:
+        sample = float(numeric_t.dropna().iloc[0])
+        unit = "s"
+        if abs(sample) > 10_000_000_000_000:
+            unit = "us"
+        elif abs(sample) > 10_000_000_000:
+            unit = "ms"
+        out["timestamp"] = pd.to_datetime(numeric_t, unit=unit, utc=True, errors="coerce")
+    else:
+        out["timestamp"] = pd.to_datetime(out["timestamp"], utc=True, errors="coerce")
+
+    out.dropna(subset=["timestamp", "open", "high", "low", "close"], inplace=True)
+    out.sort_values("timestamp", inplace=True)
+    out.set_index("timestamp", inplace=True)
+    return out[["open", "high", "low", "close", "volume"]]
+
+
+def _interval(resolution: str) -> str:
+    r = str(resolution).lower().strip()
+    return {"1m": "1minute", "3m": "3minute", "5m": "5minute",
+            "15m": "15minute", "30m": "30minute", "1h": "60minute",
+            "2h": "120minute", "4h": "240minute", "1d": "day",
+            "1w": "week"}.get(r, "5minute")
+
+
+def get_history(symbol: str = "NIFTY50", resolution: str = "5m", limit: int = 200) -> pd.DataFrame:
+    """Fetch historical OHLCV candles for an Indian market symbol."""
+    symbol = _clean_symbol(symbol)
+    if symbol not in _SEGMENT:
+        return pd.DataFrame(columns=["open", "high", "low", "close", "volume"],
+                            index=pd.DatetimeIndex([], name="timestamp"))
+
+    try:
+        client = _sdk_client()
+        _maybe_auth(client)
+        segment, token = _resolve_instrument(symbol)
+        fn = getattr(client, "historical_data")
+
+        # Use a conservative recent window.  Kotak's endpoint accepts dates;
+        # the exact argument names changed during the v2 -> v3 migration, so
+        # support both documented variants without coupling NAKSHATRA to one
+        # minor SDK release.
+        days = max(2, min(60, int(limit * 5 / 78) + 2))
+        to_dt = datetime.now(timezone.utc)
+        from_dt = to_dt - timedelta(days=days)
+        date1 = from_dt.strftime("%d/%m/%Y")
+        date2 = to_dt.strftime("%d/%m/%Y")
+
+        variants = [
+            {"exchange_segment": segment, "instrument_token": token, "from_date": date1,
+             "to_date": date2, "interval": _interval(resolution)},
+            {"exchange_segment": segment, "instrument_token": token, "from_date": from_dt.strftime("%Y-%m-%d"),
+             "to_date": to_dt.strftime("%Y-%m-%d"), "interval": _interval(resolution)},
+            {"exchange_segment": segment, "instrument_token": token, "from_date": date1,
+             "to_date": date2, "interval": str(resolution).lower()},
+        ]
+        payload = _call_with_variants(fn, variants)
+        df = _normalise_candles(payload)
+        if not df.empty:
+            return df.tail(max(10, int(limit)))
+        logger.warning("No Kotak Neo candle data for %s %s", symbol, resolution)
+    except Exception as exc:
+        logger.warning("Kotak Neo history failed for %s %s: %s", symbol, resolution, exc)
+    return pd.DataFrame(columns=["open", "high", "low", "close", "volume"],
+                        index=pd.DatetimeIndex([], name="timestamp"))
+
+
+def get_multi_timeframe_history(symbol: str = "NIFTY50", limit: int = 200):
+    symbol = _clean_symbol(symbol)
+    return {
+        "symbol": symbol,
+        "5m": get_history(symbol, "5m", limit),
+        "15m": get_history(symbol, "15m", limit),
+        "1h": get_history(symbol, "1h", limit),
+        "1d": get_history(symbol, "1d", limit),
     }
-    response = _call_by_signature(client, "option_chain", context)
-    rows = _normalize_option_rows(response)
-    return {"symbol": symbol, "expiry": expiry, "spot": spot_price, "rows": rows, "raw": response}
+
+
+def get_quote(symbol: str = "NIFTY50") -> dict[str, Any]:
+    """Return a normalised live quote dictionary."""
+    symbol = _clean_symbol(symbol)
+    try:
+        client = _sdk_client()
+        segment, token = _resolve_instrument(symbol)
+        response = client.quotes(
+            instrument_tokens=[{"instrument_token": str(token), "exchange_segment": segment}],
+            quote_type="all",
+        )
+        rows = _extract_list(response)
+        item = rows[0] if rows else (response[0] if isinstance(response, list) and response else {})
+        if not isinstance(item, dict):
+            return {"status": "NO DATA", "symbol": symbol}
+        ohlc = item.get("ohlc") or {}
+        return {
+            "status": "OK",
+            "symbol": symbol,
+            "instrument_token": str(token),
+            "exchange_segment": segment,
+            "ltp": float(item.get("ltp", 0) or 0),
+            "open": float(ohlc.get("open", 0) or 0),
+            "high": float(ohlc.get("high", 0) or 0),
+            "low": float(ohlc.get("low", 0) or 0),
+            "close": float(ohlc.get("close", 0) or 0),
+            "volume": float(item.get("last_volume", 0) or 0),
+            "oi": float(item.get("open_int", 0) or 0),
+            "change": float(item.get("change", 0) or 0),
+            "per_change": float(item.get("per_change", 0) or 0),
+            "raw": item,
+        }
+    except Exception as exc:
+        logger.warning("Kotak Neo quote failed for %s: %s", symbol, exc)
+        return {"status": "ERROR", "symbol": symbol, "reason": str(exc)}
+
+
+def get_option_chain(symbol: str = "NIFTY50", expiry: str | None = None) -> list[dict[str, Any]]:
+    """Return raw-ish option-chain rows for NAKSHATRA's option engine.
+
+    The current Neo SDK exposes option_chain() as a market-data endpoint.
+    This adapter tries the v3 keyword forms and normalises the returned rows
+    into a small schema consumed by the NAKSHATRA option-chain engine.
+    """
+    symbol = _clean_symbol(symbol)
+    if symbol not in {"NIFTY50", "BANKNIFTY", "SENSEX", "NIFTYIT"}:
+        return []
+    try:
+        client = _sdk_client()
+        _maybe_auth(client)
+        segment, token = _resolve_instrument(symbol)
+        fn = getattr(client, "option_chain")
+
+        variants = []
+        if expiry:
+            variants.extend([
+                {"exchange_segment": segment, "instrument_token": token, "expiry": expiry},
+                {"exchange_segment": segment, "instrument_token": token, "expiry_date": expiry},
+                {"exchange_segment": segment, "instrument_token": token, "expiry": str(expiry)},
+            ])
+        variants.extend([
+            {"exchange_segment": segment, "instrument_token": token},
+            {"exchange_segment": segment, "instrument_token": str(token)},
+        ])
+        payload = _call_with_variants(fn, variants)
+        rows = _extract_list(payload)
+        out = []
+        for item in rows:
+            if not isinstance(item, dict):
+                continue
+            strike = item.get("strike_price", item.get("strike", item.get("strikePrice")))
+            oi = item.get("open_int", item.get("oi", item.get("openInterest", 0)))
+            volume = item.get("volume", item.get("vol", 0))
+            opt_type = str(item.get("option_type", item.get("optionType", item.get("type", "")))).upper()
+            if opt_type in ("CE", "C"):
+                opt_type = "CALL"
+            elif opt_type in ("PE", "P"):
+                opt_type = "PUT"
+            out.append({
+                "symbol": item.get("trading_symbol", item.get("symbol", item.get("display_symbol"))),
+                "type": opt_type,
+                "strike": float(strike) if strike not in (None, "") else None,
+                "oi": float(oi or 0),
+                "volume": float(volume or 0),
+                "ltp": float(item.get("ltp", item.get("last_price", 0)) or 0),
+                "expiry": item.get("expiry", item.get("expiry_date", expiry)),
+                "raw": item,
+            })
+        return out
+    except Exception as exc:
+        logger.warning("Kotak Neo option chain failed for %s: %s", symbol, exc)
+        return []
