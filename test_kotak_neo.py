@@ -2,7 +2,7 @@
 Run locally after setting NEO_CONSUMER_KEY and NEO_ACCESS_TOKEN.
 No order APIs are called.
 """
-from kotak_neo_adapter import get_quote, get_history
+from kotak_neo_adaptor import get_quote, get_history
 
 for symbol in ("NIFTY50", "BANKNIFTY", "SENSEX", "NIFTYIT", "GOLD", "SILVER", "CRUDEOIL"):
     print(f"\n=== {symbol} ===")
