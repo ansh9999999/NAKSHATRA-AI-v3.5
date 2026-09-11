@@ -6,6 +6,5 @@ requests
 python-dotenv
 apscheduler
 jinja2
-python-multipart
 kotakneoapi==3.0.6
-pyotp>=2.9.0
+pyotp
