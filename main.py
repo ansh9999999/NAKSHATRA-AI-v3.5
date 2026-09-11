@@ -1,23 +1,18 @@
 """
-NAKSHATRA AI v4.0 - Fast dashboard API
+NAKSHATRA AI - Fast dashboard API
 
-Drop-in replacement for main.py.
+Provider routing:
+    BTCUSD / ETHUSD -> Delta
+    Indian markets -> Kotak Neo
 
-The trading/analysis engine is not changed. This file:
-- avoids JSONResponse around analysis objects,
-- adds a lightweight analysis cache,
-- prevents duplicate dashboard/scanner analysis calls,
-- exposes /api/live and /api/debug-data for the dashboard,
-- returns explicit errors instead of leaving the UI stuck on Loading.
+No order placement is performed by this API.
 """
 
 from contextlib import asynccontextmanager
-import time
 import math
-import os
-import tempfile
+import time
 
-from fastapi import FastAPI, Request, HTTPException, UploadFile, File
+from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -29,23 +24,20 @@ from database.models import get_all_trades, get_open_trades
 from history import get_multi_timeframe_history
 from analysis.signal import generate_signal
 from scanner import market_scan
-from delta import get_ticker
-from kotak_neo_adapter import get_quote as neo_get_quote
-from market_registry import MARKETS, canonical_symbol as market_symbol, get_market
+from market_registry import canonical_symbol, symbols
+from kotak_neo import get_quote
+
+try:
+    from delta import get_ticker as delta_get_ticker
+except Exception:
+    delta_get_ticker = None
+
 
 CACHE_TTL = 8
 _analysis_cache = {}
 
 
-def canonical_symbol(value, default="NIFTY50"):
-    s = market_symbol(value, default=default)
-    if s not in MARKETS:
-        raise HTTPException(status_code=400, detail=f"Unsupported symbol: {s}")
-    return s
-
-
 def _json_safe(value):
-    """Convert common pandas/numpy scalar values without changing the engine."""
     if value is None or isinstance(value, (str, bool, int, float)):
         if isinstance(value, float) and not math.isfinite(value):
             return None
@@ -85,28 +77,38 @@ def run_analysis(symbol: str, force=False):
 
     try:
         data = get_multi_timeframe_history(symbol, limit=200)
-
         entry = data.get("5m")
+
         if entry is None or entry.empty:
             result = {
                 "status": "NO DATA",
                 "symbol": symbol,
-                "message": "5m candle data unavailable from configured market-data provider",
+                "message": (
+                    "5m candle data unavailable. "
+                    "Check the market-data provider and Kotak Neo credentials."
+                ),
                 "server_time": time.time(),
             }
-            _analysis_cache[symbol] = {"time": time.time(), "result": result}
+            _analysis_cache[symbol] = {
+                "time": time.time(),
+                "result": result,
+            }
             return result
 
-        # Preserve the existing signal engine exactly.
         data["symbol"] = symbol
         result = generate_signal(data)
         result = _json_safe(result)
 
         if isinstance(result, dict):
             result["status"] = "OK"
-            result["server_ms"] = round((time.time() - started) * 1000)
+            result["server_ms"] = round(
+                (time.time() - started) * 1000
+            )
 
-        _analysis_cache[symbol] = {"time": time.time(), "result": result}
+        _analysis_cache[symbol] = {
+            "time": time.time(),
+            "result": result,
+        }
         return result
 
     except Exception as exc:
@@ -115,29 +117,72 @@ def run_analysis(symbol: str, force=False):
             "status": "ERROR",
             "symbol": symbol,
             "message": str(exc),
-            "server_ms": round((time.time() - started) * 1000),
+            "server_ms": round(
+                (time.time() - started) * 1000
+            ),
         }
-        _analysis_cache[symbol] = {"time": time.time(), "result": result}
+        _analysis_cache[symbol] = {
+            "time": time.time(),
+            "result": result,
+        }
         return result
+
+
+def _get_market_quote(symbol):
+    symbol = canonical_symbol(symbol)
+    market = None
+
+    try:
+        from market_registry import get_market
+        market = get_market(symbol)
+    except Exception:
+        pass
+
+    if market and market.get("provider") == "kotak_neo":
+        try:
+            return get_quote(symbol)
+        except Exception as exc:
+            logger.warning(
+                "Kotak quote failed %s: %s",
+                symbol,
+                exc,
+            )
+            return None
+
+    if delta_get_ticker is not None:
+        try:
+            return delta_get_ticker(symbol)
+        except Exception as exc:
+            logger.warning(
+                "Delta quote failed %s: %s",
+                symbol,
+                exc,
+            )
+
+    return None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info("Starting NAKSHATRA AI v4.0")
+    logger.info("Starting NAKSHATRA AI provider-aware API")
     initialize_database()
     start_scheduler()
     yield
-    logger.info("Stopping NAKSHATRA AI v4.0")
+    logger.info("Stopping NAKSHATRA AI provider-aware API")
 
 
 app = FastAPI(
-    title="NAKSHATRA AI v4.0",
-    version="4.0",
+    title="NAKSHATRA AI",
+    version="5.2",
     lifespan=lifespan,
 )
 
 templates = Jinja2Templates(directory="templates")
-app.mount("/static", StaticFiles(directory="static"), name="static")
+app.mount(
+    "/static",
+    StaticFiles(directory="static"),
+    name="static",
+)
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -167,9 +212,14 @@ def health():
 def api():
     return {
         "project": "NAKSHATRA AI",
-        "version": "4.0",
+        "version": "5.2",
         "status": "RUNNING",
-        "supported_symbols": list(MARKETS.keys()),
+        "supported_symbols": symbols(),
+        "provider_routing": {
+            "BTCUSD": "delta",
+            "ETHUSD": "delta",
+            "INDIAN_MARKETS": "kotak_neo",
+        },
         "dashboard_api": "/api/live?symbol=NIFTY50",
     }
 
@@ -178,33 +228,14 @@ def api():
 def api_live(symbol: str = "BTCUSD", force: bool = False):
     symbol = canonical_symbol(symbol)
     analysis = run_analysis(symbol, force=force)
-
-    ticker = None
-    market = get_market(symbol)
-    try:
-        if market and market.get("provider") == "delta":
-            ticker = get_ticker(symbol)
-        elif market and market.get("provider") == "kotak_neo":
-            ticker = neo_get_quote(symbol)
-        else:
-            ticker = None
-    except Exception as exc:
-        logger.warning("Ticker failed %s: %s", symbol, exc)
-
-    # If the ticker endpoint is temporarily unavailable, use the latest
-    # candle price already used by the signal engine. Mark it clearly as
-    # a candle fallback; this is not a fabricated tick.
-    if ticker is None and isinstance(analysis, dict):
-        try:
-            fallback_price = float(analysis.get("price"))
-        except Exception:
-            fallback_price = None
-        if fallback_price is not None and fallback_price > 0:
-            ticker = {"symbol":symbol,"price":fallback_price,"close":fallback_price,"mark_price":fallback_price,"volume":0.0,"source":"analysis_5m_close_fallback"}
+    ticker = _get_market_quote(symbol)
 
     return _json_safe({
-        "status": analysis.get("status", "UNKNOWN")
-            if isinstance(analysis, dict) else "UNKNOWN",
+        "status": (
+            analysis.get("status", "UNKNOWN")
+            if isinstance(analysis, dict)
+            else "UNKNOWN"
+        ),
         "symbol": symbol,
         "ticker": ticker,
         "analysis": analysis,
@@ -213,11 +244,11 @@ def api_live(symbol: str = "BTCUSD", force: bool = False):
 
 
 @app.get("/api/debug-data")
-def debug_data(symbol: str = "NIFTY50"):
+def debug_data(symbol: str = "BTCUSD"):
     symbol = canonical_symbol(symbol)
     data = get_multi_timeframe_history(symbol, limit=20)
 
-    return {
+    return _json_safe({
         "symbol": symbol,
         "timeframes": {
             tf: {
@@ -231,36 +262,7 @@ def debug_data(symbol: str = "NIFTY50"):
             }
             for tf, df in data.items()
         },
-    }
-
-
-@app.get("/api/diagnostics")
-def diagnostics(symbol: str = "BTCUSD"):
-    symbol = canonical_symbol(symbol)
-    result = {"symbol": symbol}
-    try:
-        result["ticker"] = get_ticker(symbol)
-    except Exception as exc:
-        result["ticker"] = None
-        result["ticker_error"] = str(exc)
-    try:
-        data = get_multi_timeframe_history(symbol, limit=5)
-        result["history"] = {tf:{"rows":int(len(df)),"last_close":float(df["close"].iloc[-1]) if not df.empty and "close" in df.columns else None} for tf,df in data.items()}
-    except Exception as exc:
-        result["history_error"] = str(exc)
-    return _json_safe(result)
-
-
-@app.get("/api/neo-status")
-def neo_status():
-    from kotak_neo_adapter import configured
-    return {
-        "provider": "kotak_neo",
-        "configured": bool(configured()),
-        "consumer_key_present": bool(os.getenv("NEO_CONSUMER_KEY") or os.getenv("KOTAK_CONSUMER_KEY")),
-        "access_token_present": bool(os.getenv("NEO_ACCESS_TOKEN") or os.getenv("KOTAK_ACCESS_TOKEN") or os.getenv("NEO_TOKEN")),
-        "auth_mode": "access_token" if (os.getenv("NEO_ACCESS_TOKEN") or os.getenv("KOTAK_ACCESS_TOKEN") or os.getenv("NEO_TOKEN")) else "totp_optional",
-    }
+    })
 
 
 @app.get("/stats")
@@ -277,7 +279,6 @@ def stats():
             pnl = 0
 
         result = trade[13]
-
         total_pnl += pnl
 
         if result == "WIN":
@@ -287,7 +288,10 @@ def stats():
         elif result == "OPEN":
             open_positions += 1
 
-    win_rate = round(wins / (wins + losses) * 100, 2) if wins + losses else 0
+    win_rate = (
+        round(wins / (wins + losses) * 100, 2)
+        if wins + losses else 0
+    )
 
     return {
         "total_trades": total,
@@ -329,106 +333,20 @@ def api_history():
     return _json_safe(history)
 
 
-
-@app.post("/api/backtest")
-async def api_backtest(
-    file: UploadFile = File(...),
-    symbol: str = "BTCUSD",
-    horizons: str = "3,6,12",
-):
-    """Run historical 5m CSV validation without placing trades."""
-    symbol = canonical_symbol(symbol)
-
-    filename = (file.filename or "").lower()
-    if not filename.endswith(".csv"):
-        raise HTTPException(status_code=400, detail="Please upload a CSV file.")
-
-    try:
-        parsed_horizons = tuple(
-            int(x.strip()) for x in str(horizons).split(",") if x.strip()
-        )
-        parsed_horizons = tuple(h for h in parsed_horizons if h > 0)
-        if not parsed_horizons:
-            raise ValueError("At least one positive horizon is required.")
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"Invalid horizons: {exc}")
-
-    temp_path = None
-    try:
-        raw = await file.read()
-        if not raw:
-            raise ValueError("Uploaded CSV is empty.")
-        if len(raw) > 25 * 1024 * 1024:
-            raise ValueError("CSV is too large. Maximum size is 25 MB.")
-
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".csv") as tmp:
-            tmp.write(raw)
-            temp_path = tmp.name
-
-        from validation.backtest import run_backtest
-        results, summary, confidence = run_backtest(
-            temp_path,
-            symbol=symbol,
-            horizons=parsed_horizons,
-            step=1,
-            min_history=250,
-        )
-
-        summary_records = _json_safe(summary.to_dict(orient="records"))
-        confidence_records = _json_safe(confidence.to_dict(orient="records"))
-
-        # Equity curve uses the selected/first horizon and BUY/SELL signals.
-        primary_h = parsed_horizons[0]
-        curve_df = results[
-            (results["horizon"] == primary_h)
-            & (results["signal"].isin(["BUY", "SELL"]))
-        ].sort_values("timestamp")
-
-        equity_curve = []
-        cumulative = 0.0
-        for _, row in curve_df.iterrows():
-            cumulative += float(row.get("signal_return_pct", 0) or 0)
-            equity_curve.append({
-                "timestamp": row["timestamp"].isoformat()
-                    if hasattr(row["timestamp"], "isoformat")
-                    else str(row["timestamp"]),
-                "value": round(cumulative, 6),
-            })
-
-        return _json_safe({
-            "status": "OK",
-            "symbol": symbol,
-            "rows": int(len(results)),
-            "summary": summary_records,
-            "confidence": confidence_records,
-            "equity_curve": equity_curve,
-            "note": (
-                f"Historical validation completed using {len(results)} evaluated "
-                f"rows; primary horizon {primary_h * 5}m."
-            ),
-        })
-    except HTTPException:
-        raise
-    except Exception as exc:
-        logger.exception("Historical validation failed")
-        raise HTTPException(status_code=400, detail=str(exc))
-    finally:
-        if temp_path:
-            try:
-                os.unlink(temp_path)
-            except OSError:
-                pass
-
-
 @app.get("/api/scanner")
 def api_scanner():
-    # Reuse the same cached analysis endpoint instead of running six
-    # fresh Delta requests for each scanner refresh.
+    # Keep the existing scanner focused on the two original crypto
+    # markets. Indian market buttons use /api/live directly, avoiding
+    # unnecessary repeated Kotak calls.
     results = []
 
-    for symbol in MARKETS:
+    for symbol in ("BTCUSD", "ETHUSD"):
         result = run_analysis(symbol)
-        technical = result.get("technical", {}) if isinstance(result, dict) else {}
+        technical = (
+            result.get("technical", {})
+            if isinstance(result, dict)
+            else {}
+        )
 
         results.append({
             "symbol": symbol,
@@ -484,7 +402,13 @@ def analysis_symbol(symbol: str):
 def scan():
     try:
         market_scan()
-        return {"status": "SUCCESS", "message": "Market Scan Completed"}
+        return {
+            "status": "SUCCESS",
+            "message": "Market Scan Completed",
+        }
     except Exception as exc:
         logger.exception("Manual scan failed")
-        return {"status": "ERROR", "message": str(exc)}
+        return {
+            "status": "ERROR",
+            "message": str(exc),
+        }
