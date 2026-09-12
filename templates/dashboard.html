@@ -19,8 +19,15 @@
     </div>
   </div>
   <div class="symbols">
-    <button class="symbol active" data-symbol="BTCUSD">BTCUSD</button>
-    <button class="symbol" data-symbol="ETHUSD">ETHUSD</button>
+    <button id="niftyButton" class="symbol active" data-symbol="NIFTY50">NIFTY</button>
+    <button id="bankniftyButton" class="symbol" data-symbol="BANKNIFTY">BANKNIFTY</button>
+    <button id="sensexButton" class="symbol" data-symbol="SENSEX">SENSEX</button>
+    <button id="niftyitButton" class="symbol" data-symbol="NIFTYIT">NIFTY IT</button>
+    <button id="goldButton" class="symbol" data-symbol="GOLD">GOLD</button>
+    <button id="silverButton" class="symbol" data-symbol="SILVER">SILVER</button>
+    <button id="crudeoilButton" class="symbol" data-symbol="CRUDEOIL">CRUDE OIL</button>
+    <button id="btcButton" class="symbol" data-symbol="BTCUSD">BTCUSD</button>
+    <button id="ethButton" class="symbol" data-symbol="ETHUSD">ETHUSD</button>
     <button id="validationToggle" class="symbol">🧪 TEST</button>
   </div>
 </header>
@@ -93,6 +100,13 @@
       <label>
         Symbol
         <select id="backtestSymbol">
+          <option value="NIFTY50">NIFTY</option>
+          <option value="BANKNIFTY">BANKNIFTY</option>
+          <option value="SENSEX">SENSEX</option>
+          <option value="NIFTYIT">NIFTY IT</option>
+          <option value="GOLD">GOLD</option>
+          <option value="SILVER">SILVER</option>
+          <option value="CRUDEOIL">CRUDE OIL</option>
           <option value="BTCUSD">BTCUSD</option>
           <option value="ETHUSD">ETHUSD</option>
         </select>
