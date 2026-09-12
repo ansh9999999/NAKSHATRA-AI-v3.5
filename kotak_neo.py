@@ -523,7 +523,6 @@ def resolve_instrument(symbol):
 
 def _quote_candidates(record, market):
     token = _text(record.get("instrument_token"))
-
     segment = (
         record.get("exchange_segment")
         or market["neo_exchange_segment"]
@@ -531,14 +530,8 @@ def _quote_candidates(record, market):
 
     candidates = []
 
-    if token:
-        candidates.append(
-            {
-                "instrument_token": token,
-                "exchange_segment": segment,
-            }
-        )
-
+    # Kotak Neo identifies exchange indices by their display name, not the
+    # numeric pSymbol found in the scrip master (e.g. SENSEX has pSymbol=1).
     if market.get("asset_class") == "INDEX":
         candidates.append(
             {
@@ -546,16 +539,19 @@ def _quote_candidates(record, market):
                 "exchange_segment": market["neo_exchange_segment"],
             }
         )
+    elif token:
+        candidates.append(
+            {
+                "instrument_token": token,
+                "exchange_segment": segment,
+            }
+        )
 
     output = []
     seen = set()
 
     for item in candidates:
-        key = (
-            item["instrument_token"],
-            item["exchange_segment"],
-        )
-
+        key = (item["instrument_token"], item["exchange_segment"])
         if key not in seen:
             seen.add(key)
             output.append(item)
@@ -725,15 +721,17 @@ def _interval_for_resolution(resolution):
 
 
 def _max_history_days(resolution):
+    # Backend date ranges are inclusive. Keep one day of headroom so a
+    # nominal 180-day request cannot become 181 calendar dates.
     return {
-        "5m": 30,
-        "15m": 60,
-        "1h": 90,
-        "1d": 180,
-        "1w": 180,
+        "5m": 29,
+        "15m": 59,
+        "1h": 89,
+        "1d": 179,
+        "1w": 179,
     }.get(
         str(resolution).lower().strip(),
-        30,
+        29,
     )
 
 
@@ -1058,12 +1056,17 @@ def get_history(
     to_dt = datetime.now(timezone.utc)
     from_dt = to_dt - timedelta(days=days)
 
-    token = record.get("instrument_token")
-
-    segment = (
-        record.get("exchange_segment")
-        or market["neo_exchange_segment"]
-    )
+    # Historical data for indices also expects the index display name,
+    # e.g. bse_cm|SENSEX, rather than a numeric scrip-master pSymbol.
+    if market.get("asset_class") == "INDEX":
+        token = market.get("data_symbol")
+        segment = market["neo_exchange_segment"]
+    else:
+        token = record.get("instrument_token")
+        segment = (
+            record.get("exchange_segment")
+            or market["neo_exchange_segment"]
+        )
 
     try:
         response = _call_historical(
