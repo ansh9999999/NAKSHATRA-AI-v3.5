@@ -441,57 +441,144 @@ def get_quote(symbol: str = "NIFTY50") -> dict[str, Any]:
 
 
 def get_option_chain(symbol: str = "NIFTY50", expiry: str | None = None) -> list[dict[str, Any]]:
-    """Return raw-ish option-chain rows for NAKSHATRA's option engine.
+    """Return normalized option-chain rows using Kotak Neo SDK v3.x.
 
-    The current Neo SDK exposes option_chain() as a market-data endpoint.
-    This adapter tries the v3 keyword forms and normalises the returned rows
-    into a small schema consumed by the NAKSHATRA option-chain engine.
+    Kotak Neo v3.x option_chain() is an underlying-based market-data endpoint:
+        client.option_chain(exchange, underlying, expiry=None,
+                            instrument_type="option", count=40)
+
+    It does NOT require an index cash-market token or the scrip-master
+    resolver.  The previous implementation incorrectly tried to resolve the
+    underlying through the cash-market scrip master and then passed the wrong
+    keyword arguments to option_chain().
     """
     symbol = _clean_symbol(symbol)
-    if symbol not in {"NIFTY50", "BANKNIFTY", "SENSEX", "NIFTYIT"}:
+
+    meta = {
+        "NIFTY50": ("nse_fo", "NIFTY"),
+        "BANKNIFTY": ("nse_fo", "BANKNIFTY"),
+        "SENSEX": ("bse_fo", "SENSEX"),
+        "NIFTYIT": ("nse_fo", "NIFTYIT"),
+    }
+    if symbol not in meta:
         return []
+
+    exchange, underlying = meta[symbol]
+
     try:
         client = _sdk_client()
-        _maybe_auth(client)
-        segment, token = _resolve_instrument(symbol)
-        fn = getattr(client, "option_chain")
+        # option_chain() is consumer-key authenticated market data and does
+        # not require a completed TOTP session according to the v3.x SDK.
+        fn = getattr(client, "option_chain", None)
+        if not callable(fn):
+            raise RuntimeError("Installed Kotak Neo SDK has no option_chain().")
 
-        variants = []
+        kwargs = {
+            "exchange": exchange,
+            "underlying": underlying,
+            "instrument_type": "option",
+            "count": 40,
+        }
         if expiry:
-            variants.extend([
-                {"exchange_segment": segment, "instrument_token": token, "expiry": expiry},
-                {"exchange_segment": segment, "instrument_token": token, "expiry_date": expiry},
-                {"exchange_segment": segment, "instrument_token": token, "expiry": str(expiry)},
-            ])
-        variants.extend([
-            {"exchange_segment": segment, "instrument_token": token},
-            {"exchange_segment": segment, "instrument_token": str(token)},
-        ])
-        payload = _call_with_variants(fn, variants)
-        rows = _extract_list(payload)
-        out = []
-        for item in rows:
-            if not isinstance(item, dict):
+            kwargs["expiry"] = str(expiry)
+
+        payload = fn(**kwargs)
+
+        if not isinstance(payload, dict):
+            logger.warning("Kotak Neo option chain returned unexpected type for %s: %s", symbol, type(payload).__name__)
+            return []
+
+        data = payload.get("data")
+        if not isinstance(data, dict):
+            data = payload.get("result") if isinstance(payload.get("result"), dict) else {}
+
+        common = data.get("common_data") or data.get("commonData") or {}
+        chain_expiry = common.get("expiryDt") or common.get("expiry") or expiry
+
+        rows: list[dict[str, Any]] = []
+
+        for side, option_type in (("call", "CALL"), ("put", "PUT")):
+            items = data.get(side) or []
+            if not isinstance(items, list):
                 continue
-            strike = item.get("strike_price", item.get("strike", item.get("strikePrice")))
-            oi = item.get("open_int", item.get("oi", item.get("openInterest", 0)))
-            volume = item.get("volume", item.get("vol", 0))
-            opt_type = str(item.get("option_type", item.get("optionType", item.get("type", "")))).upper()
-            if opt_type in ("CE", "C"):
-                opt_type = "CALL"
-            elif opt_type in ("PE", "P"):
-                opt_type = "PUT"
-            out.append({
-                "symbol": item.get("trading_symbol", item.get("symbol", item.get("display_symbol"))),
-                "type": opt_type,
-                "strike": float(strike) if strike not in (None, "") else None,
-                "oi": float(oi or 0),
-                "volume": float(volume or 0),
-                "ltp": float(item.get("ltp", item.get("last_price", 0)) or 0),
-                "expiry": item.get("expiry", item.get("expiry_date", expiry)),
-                "raw": item,
-            })
-        return out
+
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+
+                instrument = item.get("instrument") or item.get("inst") or {}
+                quote = item.get("quote") or {}
+                oi_data = item.get("openInterest") or item.get("oi") or {}
+
+                strike = (
+                    instrument.get("strikePrice")
+                    if isinstance(instrument, dict)
+                    else None
+                )
+                if strike in (None, ""):
+                    strike = item.get("strike_price", item.get("strike"))
+
+                oi = (
+                    oi_data.get("current")
+                    if isinstance(oi_data, dict)
+                    else oi_data
+                )
+                volume = (
+                    quote.get("volume")
+                    if isinstance(quote, dict)
+                    else 0
+                )
+                ltp = (
+                    quote.get("ltp")
+                    if isinstance(quote, dict)
+                    else 0
+                )
+
+                try:
+                    strike_value = float(strike)
+                except Exception:
+                    continue
+
+                try:
+                    oi_value = float(oi or 0)
+                except Exception:
+                    oi_value = 0.0
+
+                try:
+                    volume_value = float(volume or 0)
+                except Exception:
+                    volume_value = 0.0
+
+                try:
+                    ltp_value = float(ltp or 0)
+                except Exception:
+                    ltp_value = 0.0
+
+                trading_symbol = (
+                    instrument.get("symbol")
+                    if isinstance(instrument, dict)
+                    else None
+                ) or item.get("trading_symbol") or item.get("symbol")
+
+                rows.append({
+                    "symbol": trading_symbol,
+                    "type": option_type,
+                    "strike": strike_value,
+                    "oi": oi_value,
+                    "volume": volume_value,
+                    "ltp": ltp_value,
+                    "expiry": chain_expiry,
+                    "raw": item,
+                })
+
+        rows.sort(key=lambda r: (float(r["strike"]), 0 if r["type"] == "CALL" else 1))
+        logger.info(
+            "KOTAK OPTION CHAIN OK %s exchange=%s underlying=%s expiry=%s rows=%s",
+            symbol, exchange, underlying, chain_expiry, len(rows)
+        )
+        return rows
+
     except Exception as exc:
         logger.warning("Kotak Neo option chain failed for %s: %s", symbol, exc)
         return []
+
