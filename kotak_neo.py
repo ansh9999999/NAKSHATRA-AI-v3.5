@@ -971,22 +971,36 @@ def get_history(
     resolution="5m",
     limit=200,
 ):
+    """Return up to ``limit`` Kotak candles using market-hours-aware fetching.
+
+    The old implementation converted ``limit * candle_interval`` directly to
+    calendar days.  That under-fetched Indian-market data because weekends,
+    holidays and the NSE/BSE trading session mean that a calendar day contains
+    far fewer candles than a 24-hour market.
+
+    We therefore fetch backward in safe calendar chunks, merge/deduplicate the
+    results, and stop once enough candles are available.  This is especially
+    important for NIFTY/BANKNIFTY 5m/15m/1h data, where the technical engine
+    needs a meaningful EMA200 history.
+    """
     canonical = canonical_symbol(symbol)
     market = get_market(canonical)
+
+    empty = pd.DataFrame(
+        columns=[
+            "open",
+            "high",
+            "low",
+            "close",
+            "volume",
+        ]
+    )
 
     if (
         not market
         or market.get("provider") != "kotak_neo"
     ):
-        return pd.DataFrame(
-            columns=[
-                "open",
-                "high",
-                "low",
-                "close",
-                "volume",
-            ]
-        )
+        return empty
 
     record = resolve_instrument(canonical)
 
@@ -995,15 +1009,7 @@ def get_history(
             "KOTAK instrument not found for %s",
             canonical,
         )
-        return pd.DataFrame(
-            columns=[
-                "open",
-                "high",
-                "low",
-                "close",
-                "volume",
-            ]
-        )
+        return empty
 
     client = _maybe_authenticate()
 
@@ -1024,40 +1030,25 @@ def get_history(
             "Unsupported Kotak timeframe %s",
             resolution,
         )
-        return pd.DataFrame(
-            columns=[
-                "open",
-                "high",
-                "low",
-                "close",
-                "volume",
-            ]
-        )
+        return empty
 
     max_days = _max_history_days(resolution_key)
+    target = max(1, int(limit))
 
-    interval_seconds = {
-        "5m": 300,
-        "15m": 900,
-        "1h": 3600,
-        "1d": 86400,
-        "1w": 604800,
+    # Safe request chunks.  These are deliberately smaller than Kotak's
+    # documented maximum windows so a single bad boundary/date does not lose
+    # the whole history request.
+    chunk_days = {
+        "5m": 7,
+        "15m": 15,
+        "1h": 60,
+        "1d": 179,
+        "1w": 179,
     }[resolution_key]
+    chunk_days = min(chunk_days, max_days)
 
-    requested_days = (
-        int(limit) * interval_seconds / 86400
-    )
-
-    days = min(
-        requested_days,
-        max_days,
-    )
-
-    to_dt = datetime.now(timezone.utc)
-    from_dt = to_dt - timedelta(days=days)
-
-    # Historical data for indices also expects the index display name,
-    # e.g. bse_cm|SENSEX, rather than a numeric scrip-master pSymbol.
+    # Historical data for indices expects the display/index name, e.g.
+    # nse_cm|Nifty 50 or bse_cm|SENSEX, rather than a numeric scrip token.
     if market.get("asset_class") == "INDEX":
         token = market.get("data_symbol")
         segment = market["neo_exchange_segment"]
@@ -1068,53 +1059,95 @@ def get_history(
             or market["neo_exchange_segment"]
         )
 
-    try:
-        response = _call_historical(
-            client,
-            segment,
-            token,
-            from_dt,
-            to_dt,
-            resolution_key,
+    # Fetch from newest -> oldest.  We keep a little overlap between chunks;
+    # _candles_to_df + concat/drop_duplicates below makes the overlap harmless.
+    now_dt = datetime.now(timezone.utc)
+    earliest_dt = now_dt - timedelta(days=max_days)
+    cursor_to = now_dt
+    frames = []
+    calls = 0
+    max_calls = max(1, (max_days + chunk_days - 1) // chunk_days)
+
+    while cursor_to > earliest_dt and calls < max_calls:
+        cursor_from = max(
+            earliest_dt,
+            cursor_to - timedelta(days=chunk_days),
         )
+        calls += 1
 
-        df = _candles_to_df(response)
+        try:
+            response = _call_historical(
+                client,
+                segment,
+                token,
+                cursor_from,
+                cursor_to,
+                resolution_key,
+            )
+            frame = _candles_to_df(response)
 
-        if not df.empty:
-            df = df.tail(int(limit))
+            if not frame.empty:
+                frames.append(frame)
 
-            logger.info(
-                "KOTAK HISTORY OK %s %s rows=%s",
+                merged_now = pd.concat(frames, axis=0)
+                merged_now = merged_now[~merged_now.index.duplicated(keep="last")]
+
+                logger.info(
+                    "KOTAK HISTORY CHUNK %s %s rows=%s window=%s..%s",
+                    canonical,
+                    resolution_key,
+                    len(frame),
+                    cursor_from.date(),
+                    cursor_to.date(),
+                )
+
+                if len(merged_now) >= target:
+                    break
+            else:
+                logger.warning(
+                    "KOTAK history chunk empty %s %s window=%s..%s",
+                    canonical,
+                    resolution_key,
+                    cursor_from.date(),
+                    cursor_to.date(),
+                )
+
+        except Exception as exc:
+            logger.warning(
+                "KOTAK history chunk failed %s %s window=%s..%s: %s",
                 canonical,
                 resolution_key,
-                len(df),
+                cursor_from.date(),
+                cursor_to.date(),
+                exc,
             )
 
-            return df
+        # Move backward by one small overlap interval to avoid losing a candle
+        # at the boundary.  The final merge removes the duplicate.
+        cursor_to = cursor_from - timedelta(seconds=1)
 
+    if not frames:
         logger.warning(
             "KOTAK returned no candles for %s %s",
             canonical,
             resolution_key,
         )
+        return empty
 
-    except Exception as exc:
-        logger.warning(
-            "KOTAK history failed %s %s: %s",
-            canonical,
-            resolution_key,
-            exc,
-        )
+    df = pd.concat(frames, axis=0)
+    df = df[~df.index.duplicated(keep="last")]
+    df.sort_index(inplace=True)
+    df = df.tail(target)
 
-    return pd.DataFrame(
-        columns=[
-            "open",
-            "high",
-            "low",
-            "close",
-            "volume",
-        ]
+    logger.info(
+        "KOTAK HISTORY OK %s %s rows=%s chunks=%s",
+        canonical,
+        resolution_key,
+        len(df),
+        calls,
     )
+
+    return df
 
 
 def reset_client():
