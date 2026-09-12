@@ -104,6 +104,7 @@ def market_scan():
                 logger.warning("%s: no multi-timeframe data", symbol)
                 continue
 
+            data["symbol"] = symbol
             result = generate_signal(data)
 
             # No 5m candles is a normal data-availability condition, not a
