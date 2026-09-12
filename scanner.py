@@ -27,7 +27,16 @@ def create_message(result):
     technical = result.get("technical") or {}
     astrology = result.get("astrology") or {}
     numerology = result.get("numerology") or {}
-    agreement = result.get("agreement") or {}
+    agreement = result.get("agreement")
+
+    if isinstance(agreement, dict):
+        bullish = agreement.get("bullish", 0)
+        bearish = agreement.get("bearish", 0)
+        agreement_text = "structured"
+    else:
+        bullish = "N/A"
+        bearish = "N/A"
+        agreement_text = str(agreement) if agreement is not None else "N/A"
 
     required = (technical, astrology, numerology)
     if not all(isinstance(item, dict) for item in required):
@@ -70,10 +79,13 @@ Overall Confidence
 {result.get('overall_confidence', 0)}%
 
 Bullish Agreement
-{agreement.get('bullish', 0)}/3
+{bullish}/3
 
 Bearish Agreement
-{agreement.get('bearish', 0)}/3
+{bearish}/3
+
+Agreement
+{agreement_text}
 
 ================================
 """
