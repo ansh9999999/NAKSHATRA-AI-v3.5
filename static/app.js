@@ -1,5 +1,5 @@
 const state = {
-  symbol: "BTCUSD",
+  symbol: "NIFTY50",
   busy: false,
   timer: null,
   lastAnalysis: null,
@@ -274,12 +274,14 @@ function setActiveButton(id) {
 }
 
 function showLiveMode(symbol) {
-  state.symbol = symbol || "BTCUSD";
+  state.symbol = symbol || "NIFTY50";
   const live = $("liveDashboard");
   const test = $("validationPanel");
   if (live) live.hidden = false;
   if (test) test.hidden = true;
-  setActiveButton(state.symbol === "ETHUSD" ? "ethButton" : "btcButton");
+  const btn = document.querySelector(`.symbol[data-symbol="${CSS.escape(state.symbol)}"]`);
+  document.querySelectorAll(".symbol[data-symbol]").forEach(b => b.classList.remove("active"));
+  if (btn) btn.classList.add("active");
   loadLive();
 }
 
