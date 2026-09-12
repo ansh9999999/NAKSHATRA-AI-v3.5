@@ -12,10 +12,26 @@ last_alerts = {}
 
 
 def create_message(result):
+    """Create a notification only from a complete signal result.
 
-    technical = result["technical"]
-    astrology = result["astrology"]
-    numerology = result["numerology"]
+    generate_signal() intentionally returns a small {recommendation, confidence}
+    object when the 5m entry timeframe has no candles. The old scanner assumed
+    technical/astrology/numerology always existed and crashed with KeyError.
+    """
+    if not isinstance(result, dict):
+        return None
+
+    if result.get("recommendation") == "NO DATA":
+        return None
+
+    technical = result.get("technical") or {}
+    astrology = result.get("astrology") or {}
+    numerology = result.get("numerology") or {}
+    agreement = result.get("agreement") or {}
+
+    required = (technical, astrology, numerology)
+    if not all(isinstance(item, dict) for item in required):
+        return None
 
     msg = f"""
 ============================
@@ -24,51 +40,40 @@ NAKSHATRA AI
 
 ============================
 
-Symbol : {result['symbol']}
-
-Price : {result['price']}
+Symbol : {result.get('symbol', 'UNKNOWN')}
+Price : {result.get('price', 'N/A')}
 
 --------------------------------
-
 TECHNICAL ANALYSIS
 
-Signal : {technical['signal']}
-
-Confidence : {technical['confidence']}%
+Signal : {technical.get('signal', 'WAIT')}
+Confidence : {technical.get('confidence', 0)}%
 
 --------------------------------
-
 ASTROLOGICAL ANALYSIS
 
-Bias : {astrology['bias']}
-
-Score : {astrology['score']}%
+Bias : {astrology.get('bias', 'NEUTRAL')}
+Score : {astrology.get('score', 0)}%
 
 --------------------------------
-
 NUMEROLOGY ANALYSIS
 
-Bias : {numerology['bias']}
-
-Score : {numerology['score']}%
+Bias : {numerology.get('bias', 'NEUTRAL')}
+Score : {numerology.get('score', 0)}%
 
 --------------------------------
-
 FINAL RECOMMENDATION
 
-{result['recommendation']}
+{result.get('recommendation', 'WAIT')}
 
 Overall Confidence
-
-{result['overall_confidence']}%
+{result.get('overall_confidence', 0)}%
 
 Bullish Agreement
-
-{result['agreement']['bullish']}/3
+{agreement.get('bullish', 0)}/3
 
 Bearish Agreement
-
-{result['agreement']['bearish']}/3
+{agreement.get('bearish', 0)}/3
 
 ================================
 """
@@ -77,21 +82,29 @@ Bearish Agreement
 
 
 def market_scan():
-
     logger.info("NAKSHATRA Scan Started")
 
     for symbol in SYMBOLS:
-
         try:
-
             data = get_multi_timeframe_history(symbol)
 
             if not data:
+                logger.warning("%s: no multi-timeframe data", symbol)
                 continue
 
             result = generate_signal(data)
 
-            recommendation = result["recommendation"]
+            # No 5m candles is a normal data-availability condition, not a
+            # scanner exception. Do not attempt to format/send a full signal.
+            if not isinstance(result, dict):
+                logger.warning("%s: signal engine returned non-dict result", symbol)
+                continue
+
+            recommendation = result.get("recommendation", "NO DATA")
+
+            if recommendation == "NO DATA":
+                logger.warning("%s: scanner skipped because signal data is unavailable", symbol)
+                continue
 
             if recommendation == "MIXED / MANUAL REVIEW":
                 continue
@@ -99,29 +112,27 @@ def market_scan():
             if last_alerts.get(symbol) == recommendation:
                 continue
 
-            last_alerts[symbol] = recommendation
-
             message = create_message(result)
+            if not message:
+                logger.warning("%s: incomplete signal result; notification skipped", symbol)
+                continue
+
+            last_alerts[symbol] = recommendation
 
             logger.info(message)
 
             send_message(message)
 
             send_notification(
-
                 title=f"{symbol} {recommendation}",
-
-                message=message
-
+                message=message,
             )
 
-        except Exception as e:
-
-            logger.exception(f"{symbol}: {e}")
+        except Exception as exc:
+            logger.exception(f"{symbol}: {exc}")
 
     logger.info("NAKSHATRA Scan Finished")
 
 
 if __name__ == "__main__":
-
     market_scan()
