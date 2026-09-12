@@ -80,6 +80,7 @@ function renderAnalysis(payload) {
   text("agreeFinal", typeof agreement === "string" ? agreement : (agreement.final || agreement.status || a.recommendation || "—"));
 
   renderMarketTrend(technical.trend || {});
+  renderIntradayTrend(a.intraday_trend || {});
   renderOptionChain(optionChain);
 
   text("ema9", trend["5m"]?.ema9 ?? technical.ema9 ?? "—");
@@ -120,6 +121,23 @@ function renderMarketTrend(trend) {
     </div>`).join("");
 }
 
+function renderIntradayTrend(x) {
+  const box = $("intradayTrend");
+  if (!box) return;
+  const overall = x?.overall || "—";
+  const score = x?.score ?? "—";
+  text("intradayOverall", overall);
+  text("intradayScore", `Score: ${score}`);
+  const rows = Array.isArray(x?.timeframes) ? x.timeframes : [];
+  box.innerHTML = rows.map(r => `
+    <div class="intraday-row">
+      <b>${escapeHtml(String(r.timeframe || "—"))}</b>
+      <strong>${escapeHtml(String(r.trend || "UNKNOWN"))}</strong>
+      <span>${escapeHtml(String(r.score ?? "—"))}</span>
+      <small>EMA9 ${escapeHtml(String(r.ema9 ?? "—"))} · EMA50 ${escapeHtml(String(r.ema50 ?? "—"))}</small>
+    </div>`).join("") || "<div class=\"muted\">Intraday trend unavailable</div>";
+}
+
 function renderOptionChain(o) {
   const status = String(o.status || "NO DATA");
   text("ocSignal", o.signal || "NEUTRAL");
@@ -142,9 +160,11 @@ function renderOptionChain(o) {
   const puts = Array.isArray(o.top_put_oi) ? o.top_put_oi : [];
   const top = $("ocTopOi");
   if (top) {
+    const atmRows = Array.isArray(o.atm_chain) ? o.atm_chain : [];
     top.innerHTML = `
       <div class="oc-side"><b>Top CALL OI</b>${calls.map(r => `<div><span>${escapeHtml(String(r.strike))}</span><span>${escapeHtml(String(r.oi))}</span></div>`).join("") || "<div>—</div>"}</div>
-      <div class="oc-side"><b>Top PUT OI</b>${puts.map(r => `<div><span>${escapeHtml(String(r.strike))}</span><span>${escapeHtml(String(r.oi))}</span></div>`).join("") || "<div>—</div>"}</div>`;
+      <div class="oc-side"><b>Top PUT OI</b>${puts.map(r => `<div><span>${escapeHtml(String(r.strike))}</span><span>${escapeHtml(String(r.oi))}</span></div>`).join("") || "<div>—</div>"}</div>
+      <div class="oc-side oc-atm-table"><b>ATM ± Strikes</b>${atmRows.map(r => `<div class="${r.atm ? "atm-row" : ""}"><span>${escapeHtml(String(r.strike))}</span><span>C ${escapeHtml(String(r.call_ltp))}</span><span>P ${escapeHtml(String(r.put_ltp))}</span></div>`).join("") || "<div>—</div>"}</div>`;
   }
 }
 
