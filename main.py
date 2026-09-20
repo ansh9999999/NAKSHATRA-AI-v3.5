@@ -33,7 +33,7 @@ except Exception:
     delta_get_ticker = None
 
 
-CACHE_TTL = 8
+CACHE_TTL = 30
 _analysis_cache = {}
 
 
