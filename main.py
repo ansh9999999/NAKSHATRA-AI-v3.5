@@ -335,12 +335,11 @@ def api_history():
 
 @app.get("/api/scanner")
 def api_scanner():
-    # Keep the existing scanner focused on the two original crypto
-    # markets. Indian market buttons use /api/live directly, avoiding
-    # unnecessary repeated Kotak calls.
+    # Indian-market dashboard scanner: keep the side panel aligned with
+    # the active product family instead of showing unrelated crypto pairs.
     results = []
 
-    for symbol in ("BTCUSD", "ETHUSD"):
+    for symbol in ("NIFTY50", "BANKNIFTY", "SENSEX", "NIFTYIT", "GOLD", "SILVER", "CRUDEOIL"):
         result = run_analysis(symbol)
         technical = (
             result.get("technical", {})
