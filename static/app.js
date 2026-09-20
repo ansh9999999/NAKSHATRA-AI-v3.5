@@ -1,3 +1,4 @@
+const APP_VERSION='6.0.1';
 let symbol='NIFTY50',busy=false;
 const $=id=>document.getElementById(id);
 const esc=v=>String(v??'—').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'",'&#039;');
@@ -59,7 +60,34 @@ function render(a){
  renderOption(o,price);set('agreeTechnical',ag.technical||tech.signal||'—');set('agreeOptions',ag.option_chain||o.signal||'—');set('agreeAstrology',ag.astrology||ast.bias||'—');set('agreeNumerology',ag.numerology||numx.bias||'—');set('agreeFinal',ag.final||x.agreement||'—');
  set('status','● KOTAK LIVE');set('dataState','● LIVE');set('updateStatus',`Updated ${new Date().toLocaleTimeString()}`);
 }
-async function load(){if(busy)return;busy=true;try{const r=await fetch(`/api/live?symbol=${encodeURIComponent(symbol)}&_=${Date.now()}`,{cache:'no-store'});const d=await r.json();if(d.status==='OK'){render(d)}else{set('status','● DATA RISK');set('dataState','● DATA RISK');set('updateStatus',d.message||'Data unavailable')}}catch(e){set('status','● OFFLINE');set('dataState','● OFFLINE');set('updateStatus','Connection error')}finally{busy=false}}
+async function load(){
+ if(busy)return;
+ busy=true;
+ set('dataState','● CONNECTING');
+ set('status','● KOTAK CONNECTING');
+ try{
+  const r=await fetch(`/api/live?symbol=${encodeURIComponent(symbol)}&_=${Date.now()}`,{cache:'no-store',headers:{'Cache-Control':'no-cache'}});
+  if(!r.ok) throw new Error(`HTTP ${r.status}`);
+  const d=await r.json();
+  if(d && (d.ticker || d.analysis)){
+    render(d);
+    if(d.status!=='OK' && d.analysis?.status!=='OK'){
+      set('status','● DATA RISK');
+      set('dataState','● DATA RISK');
+      set('updateStatus',d.analysis?.message||'Partial market data');
+    }
+  }else{
+    set('status','● DATA RISK');
+    set('dataState','● DATA RISK');
+    set('updateStatus',d?.message||'No market data returned');
+  }
+ }catch(e){
+  set('status','● OFFLINE');
+  set('dataState','● OFFLINE');
+  set('updateStatus',`Connection error: ${e.message||'API unavailable'}`);
+ }finally{busy=false}
+}
+
 async function scanner(){try{const r=await fetch('/api/scanner?_='+Date.now(),{cache:'no-store'});const d=await r.json();const arr=Array.isArray(d)?d:(d.markets||[]);$('scanner').innerHTML=arr.map(x=>`<div class="scanner-row"><b>${esc(x.symbol)}</b><span>${esc(x.signal||x.recommendation||'WAIT')}</span><small>${esc(x.strength??x.confidence??'—')}</small></div>`).join('')||'No scanner data'}catch(e){$('scanner').textContent='Scanner unavailable'}}
 async function trades(){try{const r=await fetch('/api/history?_='+Date.now(),{cache:'no-store'});const d=await r.json();const arr=Array.isArray(d)?d:(d.history||[]);$('trades').innerHTML=(arr||[]).slice(-8).reverse().map(x=>`<tr><td>${esc(x.symbol)}</td><td>${esc(x.side)}</td><td>${esc(fmt(x.entry))}</td><td>${esc(fmt(x.pnl))}</td><td>${esc(x.status)}</td></tr>`).join('')||'<tr><td colspan="5">No trades yet</td></tr>';$('equitySummary').textContent=arr?.length?`${arr.length} recorded trades`:'No recorded trades'}catch(e){$('equitySummary').textContent='Trade history unavailable'}}
 document.querySelectorAll('.symbol').forEach(b=>b.onclick=()=>selectSymbol(b.dataset.symbol));$('refreshBtn')?.addEventListener('click',()=>{load();scanner();trades()});load();scanner();trades();setInterval(()=>{load();scanner()},10000);
