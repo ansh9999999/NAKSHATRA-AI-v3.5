@@ -1,451 +1,65 @@
-const state = {
-  symbol: "NIFTY50",
-  busy: false,
-  timer: null,
-  lastAnalysis: null,
-};
-
-const $ = (id) => document.getElementById(id);
-
-function text(id, value) {
-  const el = $(id);
-  if (el) el.textContent = value ?? "—";
+let symbol='NIFTY50',busy=false;
+const $=id=>document.getElementById(id);
+const esc=v=>String(v??'—').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'",'&#039;');
+const num=v=>{const n=Number(v);return Number.isFinite(n)?n:null};
+const fmt=(v,d=2)=>{const n=num(v);return n===null?'—':n.toLocaleString('en-IN',{maximumFractionDigits:d})};
+function set(id,v){if($(id))$(id).textContent=v??'—'}
+function selectSymbol(s){symbol=s.toUpperCase();document.querySelectorAll('.symbol').forEach(b=>b.classList.toggle('active',b.dataset.symbol===symbol));load()}
+function biasClass(v){const s=String(v||'').toUpperCase();return s.includes('BULL')||s.includes('BUY')?'bull':s.includes('BEAR')||s.includes('SELL')?'bear':''}
+function normalizeRows(o){
+ const raw=Array.isArray(o?.rows)?o.rows:(Array.isArray(o?.atm_chain)?o.atm_chain:[]);
+ return raw.map(r=>({strike:num(r.strike??r.strike_price),ceLtp:num(r.call_ltp??r.ce_ltp??r.ce?.ltp),ceOi:num(r.call_oi??r.ce_oi??r.ce?.oi),peLtp:num(r.put_ltp??r.pe_ltp??r.pe?.ltp),peOi:num(r.put_oi??r.pe_oi??r.pe?.oi),ceDoi:num(r.call_oi_change??r.ce_oi_change??r.ce?.oi_change),peDoi:num(r.put_oi_change??r.pe_oi_change??r.pe?.oi_change),atm:Boolean(r.atm)})).filter(r=>r.strike!==null).sort((a,b)=>a.strike-b.strike);
 }
-
-async function fetchJSON(url, timeoutMs = 15000) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const response = await fetch(url, {
-      cache: "no-store",
-      signal: controller.signal,
-    });
-    const body = await response.text();
-    let data;
-    try { data = JSON.parse(body); }
-    catch { throw new Error(`HTTP ${response.status}: ${body.slice(0, 160)}`); }
-
-    if (!response.ok) throw new Error(data.detail || data.message || `HTTP ${response.status}`);
-    return data;
-  } finally {
-    clearTimeout(timer);
-  }
+function calcOption(o,spot){
+ const rows=normalizeRows(o); if(!rows.length)return {rows:[],status:String(o?.status||'NO DATA').toUpperCase(),view:'SIDEWAYS',topCalls:[],topPuts:[]};
+ const atm=rows.find(r=>r.atm)?.strike??rows.reduce((a,r)=>Math.abs(r.strike-spot)<Math.abs(a.strike-spot)?r:a).strike;
+ const callOi=rows.reduce((s,r)=>s+(r.ceOi||0),0),putOi=rows.reduce((s,r)=>s+(r.peOi||0),0),pcr=callOi?putOi/callOi:null;
+ const support=(rows.filter(r=>r.strike<=atm&&r.peOi!=null).sort((a,b)=>(b.peOi||0)-(a.peOi||0))[0]||{}).strike??null;
+ const resistance=(rows.filter(r=>r.strike>=atm&&r.ceOi!=null).sort((a,b)=>(b.ceOi||0)-(a.ceOi||0))[0]||{}).strike??null;
+ let view=String(o.signal||'').toUpperCase(); view=view==='BUY'?'BULLISH':view==='SELL'?'BEARISH':'SIDEWAYS';
+ if(!o.signal&&pcr!=null)view=pcr>=1.2?'BULLISH':pcr<=.75?'BEARISH':'SIDEWAYS';
+ const byStrike=new Map(rows.map(r=>[r.strike,r]));
+ const serverCalls=Array.isArray(o.top_call_oi)?o.top_call_oi:[],serverPuts=Array.isArray(o.top_put_oi)?o.top_put_oi:[];
+ const topCalls=(serverCalls.length?serverCalls.map(r=>{const x=byStrike.get(num(r.strike))||{};return {...x,strike:num(r.strike),ceOi:num(r.oi??x.ceOi),ceLtp:num(r.ltp??x.ceLtp)}}):rows.filter(r=>r.ceOi!=null).sort((a,b)=>(b.ceOi||0)-(a.ceOi||0)).slice(0,5));
+ const topPuts=(serverPuts.length?serverPuts.map(r=>{const x=byStrike.get(num(r.strike))||{};return {...x,strike:num(r.strike),peOi:num(r.oi??x.peOi),peLtp:num(r.ltp??x.peLtp)}}):rows.filter(r=>r.peOi!=null).sort((a,b)=>(b.peOi||0)-(a.peOi||0)).slice(0,5));
+ return {rows,atm,pcr,callOi,putOi,support,resistance,maxPain:num(o.max_pain),expiry:o.expiry||'—',status:String(o.status||'OK').toUpperCase(),view,topCalls,topPuts};
 }
-
-function signalText(x) {
-  if (x === undefined || x === null || x === "") return "—";
-  return String(x);
+function renderTradePlan(x,price){
+ const p=x.trade_plan||{}; let side=String(p.side||x.recommendation||'WAIT').toUpperCase();
+ if(p.status==='READY'&&p.entry_zone){set('entryZone',p.entry_zone);set('stopLoss',fmt(p.stop_loss));set('tp1',fmt(p.target1));set('tp2',fmt(p.target2));set('tp3',fmt(p.target3));set('rr',p.risk_reward||'—');set('riskState',`${side} • ${p.basis||'AI risk model'}`);return}
+ const atr=num(p.atr??x.atr??x.technical?.atr??x.technical?.trend?.['5m']?.atr),px=num(price);
+ if((side==='BUY'||side==='SELL')&&atr&&px){const risk=Math.max(1.2*atr,px*.0025),half=Math.max(.15*atr,px*.0005);set('entryZone',`${fmt(px-half)} – ${fmt(px+half)}`);if(side==='BUY'){set('stopLoss',fmt(px-risk));set('tp1',fmt(px+1.5*risk));set('tp2',fmt(px+2.5*risk));set('tp3',fmt(px+3.5*risk))}else{set('stopLoss',fmt(px+risk));set('tp1',fmt(px-1.5*risk));set('tp2',fmt(px-2.5*risk));set('tp3',fmt(px-3.5*risk))}set('rr','1 : 2.5');set('riskState',`${side} • ATR based`);return}
+ ['entryZone','stopLoss','tp1','tp2','tp3','rr'].forEach(id=>set(id,'—'));set('riskState','WAIT • No actionable trade plan');
 }
-
-function renderAnalysis(payload) {
-  const a = payload.analysis || {};
-  state.lastAnalysis = a;
-
-  if (a.status === "ERROR" || a.status === "NO DATA") {
-    text("decision", a.status);
-    text("confidence", a.message || "Analysis data unavailable");
-    text("action", "Action: WAIT");
-    $("reasons").innerHTML = `<li>${escapeHtml(a.message || "Delta data unavailable")}</li>`;
-    return;
-  }
-
-  const technical = a.technical || {};
-  const astrology = a.astrology || {};
-  const numerology = a.numerology || {};
-  const agreement = a.agreement || {};
-  const optionChain = a.option_chain || {};
-
-  text("decision", a.recommendation || a.action || "WAIT");
-  text("confidence", `Overall Confidence: ${a.overall_confidence ?? "—"}`);
-  text("action", `Action: ${a.recommendation || a.action || "WAIT"}`);
-
-  text("technical", technical.signal || "NEUTRAL");
-  text("technicalConf", `Confidence: ${technical.confidence ?? "—"}`);
-  text("astrology", astrology.bias || "NEUTRAL");
-  text("astrologyScore", `Score: ${astrology.score ?? "—"}`);
-  text("numerology", numerology.bias || "NEUTRAL");
-  text("numerologyScore", `Score: ${numerology.score ?? "—"}`);
-
-  const trend = technical.trend || {};
-  const mtf = ["5m","15m","1h","1d","1w","1mo"];
-  $("mtf").innerHTML = mtf.map(tf => {
-    const x = trend[tf] || {};
-    return `<div class="tf"><b>${tf}</b><span>${escapeHtml(signalText(x.trend))}</span><small>score ${escapeHtml(signalText(x.score))}</small></div>`;
-  }).join("");
-
-  text("agreeTechnical", technical.signal || "—");
-  text("agreeAstrology", astrology.bias || "—");
-  text("agreeNumerology", numerology.bias || "—");
-  text("agreeOptionChain", optionChain.signal || "—");
-  text("agreeFinal", typeof agreement === "string" ? agreement : (agreement.final || agreement.status || a.recommendation || "—"));
-
-  renderMarketTrend(technical.trend || {});
-  renderIntradayTrend(a.intraday_trend || {});
-  renderOptionChain(optionChain);
-
-  text("ema9", trend["5m"]?.ema9 ?? technical.ema9 ?? "—");
-  text("ema50", trend["5m"]?.ema50 ?? technical.ema50 ?? "—");
-  text("ema200", trend["5m"]?.ema200 ?? technical.ema200 ?? "—");
-
-  const reasons = Array.isArray(a.reasons)
-    ? a.reasons
-    : Array.isArray(technical.reasons) ? technical.reasons : [];
-
-  $("reasons").innerHTML = reasons.length
-    ? reasons.slice(0, 20).map(r => `<li>${escapeHtml(String(r))}</li>`).join("")
-    : "<li>No reasons returned by analysis engine.</li>";
+function renderOption(o,price){
+ const oc=calcOption(o,price||0);set('expiry',`Expiry ${oc.expiry}`);set('optionStatus',oc.status==='OK'?'● LIVE':'● NO DATA');set('pcrOi',fmt(oc.pcr,3));set('pcrVol',fmt(o.volume_pcr??o.pcr_volume,3));set('atm',fmt(oc.atm,0));set('maxPain',fmt(oc.maxPain,0));set('support',fmt(oc.support??o.max_put_oi_support,0));set('resistance',fmt(oc.resistance??o.max_call_oi_resistance,0));set('optionView',oc.view);set('optionViewReason',o.reason||'OI positioning snapshot');$('optionView').className=biasClass(oc.view);
+ const row=(r,i,type)=>`<tr><td>${i+1}</td><td>${fmt(r.strike,0)}</td><td>${fmt(type==='CE'?r.ceOi:r.peOi,0)}</td><td>${fmt(type==='CE'?r.ceLtp:r.peLtp,2)}</td><td>${fmt(type==='CE'?r.ceDoi:r.peDoi,0)}</td></tr>`;
+ $('topCalls').innerHTML=oc.topCalls.map((r,i)=>row(r,i,'CE')).join('')||'<tr><td colspan="5">No call OI data</td></tr>';
+ $('topPuts').innerHTML=oc.topPuts.map((r,i)=>row(r,i,'PE')).join('')||'<tr><td colspan="5">No put OI data</td></tr>';
+ set('optionNote',oc.status==='OK'?'Live Kotak Neo expiry chain • Top 5 OI only':'Option chain unavailable — no stale signal');
 }
-
-
-function renderMarketTrend(trend) {
-  const keys = ["5m", "15m", "1h", "1d", "1w", "1mo"];
-  const rows = keys.map(tf => ({ tf, ...(trend[tf] || {}) }));
-  const available = rows.filter(x => x.trend && x.trend !== "UNKNOWN");
-  const total = available.reduce((n, x) => n + (Number(x.score) || 0), 0);
-  const avg = available.length ? total / available.length : 0;
-  let overall = "SIDEWAYS";
-  if (avg >= 15) overall = "UPTREND";
-  else if (avg <= -15) overall = "DOWNTREND";
-
-  text("marketTrendOverall", overall);
-  text("marketTrendScore", `Score: ${total}`);
-  const box = $("marketTrendTable");
-  if (!box) return;
-  box.innerHTML = rows.map(x => `
-    <div class="trend-row">
-      <b>${escapeHtml(x.tf)}</b>
-      <strong class="trend-${escapeHtml(String(x.trend || "UNKNOWN").toLowerCase().replaceAll("_", "-"))}">${escapeHtml(x.trend || "UNKNOWN")}</strong>
-      <span>Score: ${escapeHtml(String(x.score ?? "—"))}</span>
-    </div>`).join("");
+function render(a){
+ const x=a.analysis||{},t=a.ticker||{},o=x.option_chain||{},it=x.intraday_trend||{},ast=x.astrology||{},numx=x.numerology||{},sent=x.sentiment||{},ag=x.agreement_detail||{};
+ const by={};(it.timeframes||[]).forEach(z=>by[z.timeframe]=z); const tr=x.technical?.trend||{};
+ const price=num(t.ltp??t.price??t.close??x.price); const perChange=num(t.per_change??t.change_24h);
+ set('marketSymbol',symbol==='NIFTY50'?'NIFTY 50':symbol.replace('CRUDEOIL','CRUDE OIL'));set('price',fmt(price));set('change',perChange===null?'':`1D ${perChange>=0?'▲':'▼'} ${fmt(perChange)}%`);set('dayChange',perChange===null?'—':`${perChange>=0?'▲':'▼'} ${fmt(perChange)}%`);set('dayChangePct',t.change!=null?`${t.change>=0?'+':''}${fmt(t.change)}`:'');set('dayHigh',fmt(t.high??x.day_high));set('dayLow',fmt(t.low??x.day_low));set('dayVolume',fmt(t.volume,0));set('openInterest',fmt(t.oi??x.open_interest,0));
+ const decision=String(x.recommendation||x.signal||'WAIT').toUpperCase();set('decision',decision);set('whyDecision',decision);const conf=num(x.confidence??x.overall_confidence);set('confidence',`Strength ${fmt(conf,0)}/100`);if($('confidenceBar')){$('confidenceBar').style.width=`${Math.max(0,Math.min(100,conf||0))}%`;$('confidenceBar').className=biasClass(decision)}
+ set('agreementMini',`Agreement ${ag.final||x.agreement||'—'}`);set('agreementMini2',ag.final||x.agreement||'—');
+ set('tf5',tr['5m']?.trend||by['5m']?.trend||'—');set('tf15',tr['15m']?.trend||by['15m']?.trend||'—');set('tf1h',tr['1h']?.trend||by['1h']?.trend||'—');set('tf4h',tr['4h']?.trend||tr['1d']?.trend||by['1d']?.trend||'—');set('tf1d',tr['1d']?.trend||by['1d']?.trend||'—');
+ set('intra5',by['5m']?.trend||tr['5m']?.trend||'—');set('intra15',by['15m']?.trend||tr['15m']?.trend||'—');set('intra1h',by['1h']?.trend||tr['1h']?.trend||'—');set('intra4h',by['4h']?.trend||tr['1d']?.trend||'—');set('intra1d',by['1d']?.trend||tr['1d']?.trend||'—');
+ set('activityRegime','MARKET DATA');set('relativeVolume','—');set('volumeRegime',t.volume?'LIVE':'—');
+ renderTradePlan(x,price);set('eventRisk','NORMAL');set('eventDisclaimer','Event feed will be populated when the Indian macro calendar provider is connected.');
+ $('reasons').innerHTML=(x.reasons||[]).slice(0,6).map(r=>`<div>• ${esc(r)}</div>`).join('')||'<div>No high-quality reasons returned.</div>';
+ $('catalyst').innerHTML='<div class="catalyst-row"><div class="event-main"><strong>Indian Market Calendar</strong><span class="event-time">🕒 IST</span><span class="effect-label">MARKET EFFECT</span><small>Macro/expiry event data is not being fabricated. The card will show verified events once a calendar feed is connected.</small></div><div class="event-right"><b>INFO</b><small>DATA</small></div></div>';
+ const tech=x.technical||{};set('moduleTechnical',tech.signal||'—');set('moduleOption',o.signal||'—');set('moduleAstrology',ast.bias||'—');set('moduleAstrology2',ast.bias||'—');set('moduleNumerology',numx.bias||'—');set('moduleNumerology2',numx.bias||'—');set('trend',tr.overall_trend||it.overall||'—');
+ $('metrics').innerHTML=[['EMA9',tr['5m']?.ema9],['EMA50',tr['5m']?.ema50],['EMA200',tr['5m']?.ema200],['RSI',tech.momentum?.rsi??x.rsi],['MACD',tech.momentum?.macd??x.macd],['ATR',x.atr??'—'],['Technical Score',tech.confidence??tech.score],['MTF Score',tr.total_score]].map(q=>`<div><small>${q[0]}</small><b>${fmt(q[1],4)}</b></div>`).join('');
+ $('astroRows').innerHTML=[['Rashi Trend',ast.rashi_trend||ast.bias],['Nakshatra',ast.nakshatra_influence||ast.nakshatra],['Tithi',ast.tithi_impact||ast.tithi],['Yoga',ast.yoga],['Karana',ast.karana],['Planetary',ast.planetary_alignment],['Score',ast.score]].map(q=>`<div><span>${esc(q[0])}</span><b>${esc(q[1])}</b></div>`).join('');
+ $('numRows').innerHTML=[['Life Path',numx.life_path],['Expression',numx.expression_number],['Day Vibration',numx.day_vibration],['Market Number',numx.market_number],['Score',numx.score]].map(q=>`<div><span>${esc(q[0])}</span><b>${esc(q[1])}</b></div>`).join('');
+ const sb=sent.bias||sent.signal||sent.overall||'NOT CONNECTED';set('sentimentBias',sb);$('sentimentRows').innerHTML=[['Social Sentiment',sent.social_sentiment||'NOT CONNECTED'],['News Sentiment',sent.news_sentiment||'NOT CONNECTED'],['Fear/Greed',sent.fear_greed||'NOT CONNECTED'],['Overall Score',sent.score??'—']].map(q=>`<div><span>${esc(q[0])}</span><b>${esc(q[1])}</b></div>`).join('');
+ renderOption(o,price);set('agreeTechnical',ag.technical||tech.signal||'—');set('agreeOptions',ag.option_chain||o.signal||'—');set('agreeAstrology',ag.astrology||ast.bias||'—');set('agreeNumerology',ag.numerology||numx.bias||'—');set('agreeFinal',ag.final||x.agreement||'—');
+ set('status','● KOTAK LIVE');set('dataState','● LIVE');set('updateStatus',`Updated ${new Date().toLocaleTimeString()}`);
 }
-
-function renderIntradayTrend(x) {
-  const box = $("intradayTrend");
-  if (!box) return;
-  const overall = x?.overall || "—";
-  const score = x?.score ?? "—";
-  text("intradayOverall", overall);
-  text("intradayScore", `Score: ${score}`);
-  const rows = Array.isArray(x?.timeframes) ? x.timeframes : [];
-  box.innerHTML = rows.map(r => `
-    <div class="intraday-row">
-      <b>${escapeHtml(String(r.timeframe || "—"))}</b>
-      <strong>${escapeHtml(String(r.trend || "UNKNOWN"))}</strong>
-      <span>${escapeHtml(String(r.score ?? "—"))}</span>
-      <small>EMA9 ${escapeHtml(String(r.ema9 ?? "—"))} · EMA50 ${escapeHtml(String(r.ema50 ?? "—"))}</small>
-    </div>`).join("") || "<div class=\"muted\">Intraday trend unavailable</div>";
-}
-
-function renderOptionChain(o) {
-  const status = String(o.status || "NO DATA");
-  text("ocSignal", o.signal || "NEUTRAL");
-  text("ocConfidence", status === "OK" ? `Confidence: ${o.confidence ?? "—"}%` : status);
-  text("ocExpiry", o.expiry || "—");
-  text("ocPcr", o.pcr ?? "—");
-  text("ocVolumePcr", o.volume_pcr ?? "—");
-  text("ocCallOi", o.call_oi ?? "—");
-  text("ocPutOi", o.put_oi ?? "—");
-  text("ocCallVol", o.call_volume ?? "—");
-  text("ocPutVol", o.put_volume ?? "—");
-  text("ocView", o.signal === "BUY" ? "BULLISH" : o.signal === "SELL" ? "BEARISH" : "SIDEWAYS");
-  text("ocSupport", o.max_put_oi_support ?? "—");
-  text("ocResistance", o.max_call_oi_resistance ?? "—");
-  text("ocMaxPain", o.max_pain ?? "—");
-  text("ocAtm", o.atm_strike ?? "—");
-  const note = $("ocNote");
-  if (note) note.textContent = status === "OK" ? (o.reason || "Live Delta option-chain data") : (o.reason || "Option-chain data unavailable");
-
-  const calls = Array.isArray(o.top_call_oi) ? o.top_call_oi : [];
-  const puts = Array.isArray(o.top_put_oi) ? o.top_put_oi : [];
-  const top = $("ocTopOi");
-  if (top) {
-    const atmRows = Array.isArray(o.atm_chain) ? o.atm_chain : [];
-    top.innerHTML = `
-      <div class="oc-side"><b>Top CALL OI</b>${calls.map(r => `<div><span>${escapeHtml(String(r.strike))}</span><span>${escapeHtml(String(r.oi))}</span></div>`).join("") || "<div>—</div>"}</div>
-      <div class="oc-side"><b>Top PUT OI</b>${puts.map(r => `<div><span>${escapeHtml(String(r.strike))}</span><span>${escapeHtml(String(r.oi))}</span></div>`).join("") || "<div>—</div>"}</div>
-      <div class="oc-side"><b>Analysis</b><div><span>View</span><span>${escapeHtml(o.signal === "BUY" ? "BULLISH" : o.signal === "SELL" ? "BEARISH" : "SIDEWAYS")}</span></div><div><span>Support</span><span>${escapeHtml(String(o.max_put_oi_support ?? "—"))}</span></div><div><span>Resistance</span><span>${escapeHtml(String(o.max_call_oi_resistance ?? "—"))}</span></div><div><span>Max Pain</span><span>${escapeHtml(String(o.max_pain ?? "—"))}</span></div></div>`;
-  }
-}
-
-function renderMarket(payload) {
-  const ticker = payload.ticker;
-  if (!ticker) {
-    text("livePrice", "Price unavailable");
-    text("liveMeta", "Ticker API did not return data");
-    return;
-  }
-
-  const price = ticker.price ?? ticker.close ?? ticker.mark_price;
-  text("livePrice", price !== undefined ? Number(price).toLocaleString() : "—");
-  const pct = ticker.per_change ?? ticker.change_pct ?? ticker.changePercent;
-  const pctText = pct !== undefined && pct !== null ? ` • 1D ${Number(pct).toFixed(2)}%` : "";
-  text("liveMeta", `${payload.symbol} • Mark ${ticker.mark_price ?? "—"} • Volume ${ticker.volume ?? "—"}${pctText}`);
-}
-
-async function loadLive() {
-  if (state.busy) return;
-  state.busy = true;
-  text("updateStatus", "🟡 Updating...");
-
-  try {
-    const data = await fetchJSON(`/api/live?symbol=${encodeURIComponent(state.symbol)}`);
-    renderMarket(data);
-    renderAnalysis(data);
-    text("updateStatus", `🟢 Updated ${new Date().toLocaleTimeString()}`);
-    $("brokerStatus").textContent = "🟢 Broker Online";
-  } catch (err) {
-    console.error(err);
-    text("updateStatus", "🔴 Data Error");
-    text("livePrice", "Data unavailable");
-    text("liveMeta", err.name === "AbortError" ? "Request timeout" : err.message);
-    text("decision", "WAIT");
-    text("confidence", "Overall Confidence: —");
-    text("action", "Action: Data unavailable");
-    $("reasons").innerHTML = `<li>${escapeHtml(err.message)}</li>`;
-    $("brokerStatus").textContent = "🟠 Broker/API Issue";
-  } finally {
-    state.busy = false;
-  }
-}
-
-async function loadScanner() {
-  try {
-    const data = await fetchJSON("/api/scanner");
-    $("scanner").innerHTML = data.map(x =>
-      `<div class="scanner-row"><b>${escapeHtml(x.symbol)}</b><span>${escapeHtml(x.signal)}</span><small>${escapeHtml(String(x.strength ?? "—"))}%</small></div>`
-    ).join("");
-  } catch (err) {
-    $("scanner").textContent = `Scanner error: ${err.message}`;
-  }
-}
-
-async function loadStatsAndTrades() {
-  try {
-    const [stats, trades] = await Promise.all([
-      fetchJSON("/stats"),
-      fetchJSON("/api/history"),
-    ]);
-
-    const rows = Array.isArray(trades) ? trades : [];
-    $("trades").innerHTML = rows.length
-      ? rows.slice(-20).reverse().map((t, i) =>
-        `<tr>
-          <td>${i + 1}</td>
-          <td>${escapeHtml(t.symbol)}</td>
-          <td>${escapeHtml(t.side)}</td>
-          <td>${escapeHtml(String(t.entry ?? "—"))}</td>
-          <td>${escapeHtml(String(t.exit ?? "—"))}</td>
-          <td>${escapeHtml(String(t.pnl ?? "—"))}</td>
-          <td>${escapeHtml(t.status)}</td>
-        </tr>`).join("")
-      : `<tr><td colspan="7">No trades yet</td></tr>`;
-
-    drawEquity(rows);
-  } catch (err) {
-    $("trades").innerHTML = `<tr><td colspan="7">${escapeHtml(err.message)}</td></tr>`;
-  }
-}
-
-function drawEquity(rows) {
-  const canvas = $("equityChart");
-  if (!canvas) return;
-  const ctx = canvas.getContext("2d");
-  const w = canvas.width = canvas.clientWidth * devicePixelRatio;
-  const h = canvas.height = 180 * devicePixelRatio;
-  ctx.clearRect(0, 0, w, h);
-
-  if (!rows.length) {
-    ctx.fillText("No closed trade data", 12 * devicePixelRatio, 30 * devicePixelRatio);
-    return;
-  }
-
-  let equity = 0;
-  const points = rows.map(r => {
-    equity += Number(r.pnl || 0);
-    return equity;
-  });
-
-  const min = Math.min(...points, 0);
-  const max = Math.max(...points, 0);
-  const range = max - min || 1;
-  const pad = 20 * devicePixelRatio;
-
-  ctx.beginPath();
-  points.forEach((v, i) => {
-    const x = pad + i * ((w - pad * 2) / Math.max(points.length - 1, 1));
-    const y = h - pad - ((v - min) / range) * (h - pad * 2);
-    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-  });
-  ctx.stroke();
-}
-
-function escapeHtml(value) {
-  return String(value)
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#039;");
-}
-
-function setActiveButton(id) {
-  document.querySelectorAll(".symbol").forEach(b => b.classList.remove("active"));
-  const btn = $(id);
-  if (btn) btn.classList.add("active");
-}
-
-function showLiveMode(symbol) {
-  state.symbol = symbol || "NIFTY50";
-  const live = $("liveDashboard");
-  const test = $("validationPanel");
-  if (live) live.hidden = false;
-  if (test) test.hidden = true;
-  const btn = document.querySelector(`.symbol[data-symbol="${CSS.escape(state.symbol)}"]`);
-  document.querySelectorAll(".symbol[data-symbol]").forEach(b => b.classList.remove("active"));
-  if (btn) btn.classList.add("active");
-  loadLive();
-}
-
-function showTestMode() {
-  const live = $("liveDashboard");
-  const test = $("validationPanel");
-  if (live) live.hidden = true;
-  if (test) test.hidden = false;
-  setActiveButton("validationToggle");
-  test?.scrollIntoView({ behavior: "smooth", block: "start" });
-}
-
-document.querySelectorAll(".symbol[data-symbol]").forEach(btn => {
-  btn.addEventListener("click", () => showLiveMode(btn.dataset.symbol));
-});
-
-async function refreshAll() {
-  // TEST mode is isolated from the live dashboard.
-  if ($("validationPanel") && !$("validationPanel").hidden) return;
-  await Promise.allSettled([
-    loadLive(),
-    loadScanner(),
-    loadStatsAndTrades(),
-  ]);
-}
-
-refreshAll();
-setInterval(refreshAll, 10000);
-
-
-// ------------------------------------------------------------
-// Historical Backtest / Validation
-// ------------------------------------------------------------
-const validationToggle = $("validationToggle");
-const validationPanel = $("validationPanel");
-const runBacktestBtn = $("runBacktest");
-
-if (validationToggle && validationPanel) {
-  validationToggle.addEventListener("click", showTestMode);
-}
-
-function drawValidationEquity(points) {
-  const canvas = $("backtestChart");
-  if (!canvas) return;
-  const ctx = canvas.getContext("2d");
-  const dpr = window.devicePixelRatio || 1;
-  const w = canvas.clientWidth || 320;
-  const h = 190;
-  canvas.width = w * dpr;
-  canvas.height = h * dpr;
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.clearRect(0, 0, w, h);
-
-  if (!points || !points.length) {
-    ctx.fillText("No validation trades", 12, 28);
-    return;
-  }
-
-  const values = points.map(p => Number(p.value) || 0);
-  const min = Math.min(...values, 0);
-  const max = Math.max(...values, 0);
-  const range = max - min || 1;
-  const pad = 18;
-
-  ctx.beginPath();
-  values.forEach((v, i) => {
-    const x = pad + i * ((w - pad * 2) / Math.max(values.length - 1, 1));
-    const y = h - pad - ((v - min) / range) * (h - pad * 2);
-    if (i === 0) ctx.moveTo(x, y);
-    else ctx.lineTo(x, y);
-  });
-  ctx.stroke();
-}
-
-function renderBacktest(data) {
-  const rows = Array.isArray(data.summary) ? data.summary : [];
-  const first = rows[0] || {};
-
-  text("btTrades", first.trades ?? "0");
-  text("btWinRate", first.win_rate_pct !== undefined ? `${first.win_rate_pct}%` : "—");
-  text("btAvgReturn", first.avg_return_pct !== undefined ? `${first.avg_return_pct}%` : "—");
-
-  $("backtestTable").innerHTML = rows.length
-    ? rows.map(r => `<tr>
-        <td>${escapeHtml(String(r.horizon * 5))}m</td>
-        <td>${escapeHtml(String(r.trades))}</td>
-        <td>${escapeHtml(String(r.wins))}</td>
-        <td>${escapeHtml(String(r.losses))}</td>
-        <td>${escapeHtml(String(r.win_rate_pct))}%</td>
-        <td>${escapeHtml(String(r.avg_return_pct))}%</td>
-      </tr>`).join("")
-    : `<tr><td colspan="6">No BUY/SELL validation signals found</td></tr>`;
-
-  $("backtestNote").textContent = data.note || "";
-  $("backtestResults").hidden = false;
-  drawValidationEquity(data.equity_curve || []);
-}
-
-if (runBacktestBtn) {
-  runBacktestBtn.addEventListener("click", async () => {
-    const fileInput = $("backtestFile");
-    const status = $("backtestStatus");
-    const file = fileInput?.files?.[0];
-
-    if (!file) {
-      status.textContent = "Please select a historical 5m CSV first.";
-      return;
-    }
-
-    const form = new FormData();
-    form.append("file", file);
-    form.append("symbol", $("backtestSymbol")?.value || "BTCUSD");
-
-    const horizon = $("backtestHorizon")?.value || "3";
-    // Keep the selected horizon as the primary metric and also test
-    // the standard 30m/60m horizons for comparison.
-    const horizons = [...new Set([Number(horizon), 6, 12])];
-    form.append("horizons", horizons.join(","));
-
-    runBacktestBtn.disabled = true;
-    status.textContent = "Running validation… this can take a little while.";
-    $("backtestResults").hidden = true;
-
-    try {
-      const response = await fetch("/api/backtest", {
-        method: "POST",
-        body: form,
-        cache: "no-store",
-      });
-      const data = await response.json();
-
-      if (!response.ok || data.status !== "OK") {
-        throw new Error(data.message || `HTTP ${response.status}`);
-      }
-
-      status.textContent = `Validation complete • ${data.rows} evaluated rows`;
-      renderBacktest(data);
-    } catch (err) {
-      console.error(err);
-      status.textContent = `Validation error: ${err.message}`;
-      $("backtestResults").hidden = true;
-    } finally {
-      runBacktestBtn.disabled = false;
-    }
-  });
-}
+async function load(){if(busy)return;busy=true;try{const r=await fetch(`/api/live?symbol=${encodeURIComponent(symbol)}&_=${Date.now()}`,{cache:'no-store'});const d=await r.json();if(d.status==='OK'){render(d)}else{set('status','● DATA RISK');set('dataState','● DATA RISK');set('updateStatus',d.message||'Data unavailable')}}catch(e){set('status','● OFFLINE');set('dataState','● OFFLINE');set('updateStatus','Connection error')}finally{busy=false}}
+async function scanner(){try{const r=await fetch('/api/scanner?_='+Date.now(),{cache:'no-store'});const d=await r.json();const arr=Array.isArray(d)?d:(d.markets||[]);$('scanner').innerHTML=arr.map(x=>`<div class="scanner-row"><b>${esc(x.symbol)}</b><span>${esc(x.signal||x.recommendation||'WAIT')}</span><small>${esc(x.strength??x.confidence??'—')}</small></div>`).join('')||'No scanner data'}catch(e){$('scanner').textContent='Scanner unavailable'}}
+async function trades(){try{const r=await fetch('/api/history?_='+Date.now(),{cache:'no-store'});const d=await r.json();const arr=Array.isArray(d)?d:(d.history||[]);$('trades').innerHTML=(arr||[]).slice(-8).reverse().map(x=>`<tr><td>${esc(x.symbol)}</td><td>${esc(x.side)}</td><td>${esc(fmt(x.entry))}</td><td>${esc(fmt(x.pnl))}</td><td>${esc(x.status)}</td></tr>`).join('')||'<tr><td colspan="5">No trades yet</td></tr>';$('equitySummary').textContent=arr?.length?`${arr.length} recorded trades`:'No recorded trades'}catch(e){$('equitySummary').textContent='Trade history unavailable'}}
+document.querySelectorAll('.symbol').forEach(b=>b.onclick=()=>selectSymbol(b.dataset.symbol));$('refreshBtn')?.addEventListener('click',()=>{load();scanner();trades()});load();scanner();trades();setInterval(()=>{load();scanner()},10000);
