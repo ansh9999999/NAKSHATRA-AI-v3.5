@@ -104,10 +104,8 @@ function renderMarketTrend(trend) {
   const total = available.reduce((n, x) => n + (Number(x.score) || 0), 0);
   const avg = available.length ? total / available.length : 0;
   let overall = "SIDEWAYS";
-  if (avg >= 40) overall = "STRONG_BULL";
-  else if (avg >= 15) overall = "BULL";
-  else if (avg <= -40) overall = "STRONG_BEAR";
-  else if (avg <= -15) overall = "BEAR";
+  if (avg >= 15) overall = "UPTREND";
+  else if (avg <= -15) overall = "DOWNTREND";
 
   text("marketTrendOverall", overall);
   text("marketTrendScore", `Score: ${total}`);
@@ -149,6 +147,7 @@ function renderOptionChain(o) {
   text("ocPutOi", o.put_oi ?? "—");
   text("ocCallVol", o.call_volume ?? "—");
   text("ocPutVol", o.put_volume ?? "—");
+  text("ocView", o.signal === "BUY" ? "BULLISH" : o.signal === "SELL" ? "BEARISH" : "SIDEWAYS");
   text("ocSupport", o.max_put_oi_support ?? "—");
   text("ocResistance", o.max_call_oi_resistance ?? "—");
   text("ocMaxPain", o.max_pain ?? "—");
@@ -164,7 +163,7 @@ function renderOptionChain(o) {
     top.innerHTML = `
       <div class="oc-side"><b>Top CALL OI</b>${calls.map(r => `<div><span>${escapeHtml(String(r.strike))}</span><span>${escapeHtml(String(r.oi))}</span></div>`).join("") || "<div>—</div>"}</div>
       <div class="oc-side"><b>Top PUT OI</b>${puts.map(r => `<div><span>${escapeHtml(String(r.strike))}</span><span>${escapeHtml(String(r.oi))}</span></div>`).join("") || "<div>—</div>"}</div>
-      <div class="oc-side oc-atm-table"><b>ATM ± Strikes</b>${atmRows.map(r => `<div class="${r.atm ? "atm-row" : ""}"><span>${escapeHtml(String(r.strike))}</span><span>C ${escapeHtml(String(r.call_ltp))}</span><span>P ${escapeHtml(String(r.put_ltp))}</span></div>`).join("") || "<div>—</div>"}</div>`;
+      <div class="oc-side"><b>Analysis</b><div><span>View</span><span>${escapeHtml(o.signal === "BUY" ? "BULLISH" : o.signal === "SELL" ? "BEARISH" : "SIDEWAYS")}</span></div><div><span>Support</span><span>${escapeHtml(String(o.max_put_oi_support ?? "—"))}</span></div><div><span>Resistance</span><span>${escapeHtml(String(o.max_call_oi_resistance ?? "—"))}</span></div><div><span>Max Pain</span><span>${escapeHtml(String(o.max_pain ?? "—"))}</span></div></div>`;
   }
 }
 
@@ -178,7 +177,9 @@ function renderMarket(payload) {
 
   const price = ticker.price ?? ticker.close ?? ticker.mark_price;
   text("livePrice", price !== undefined ? Number(price).toLocaleString() : "—");
-  text("liveMeta", `${payload.symbol} • Mark ${ticker.mark_price ?? "—"} • Volume ${ticker.volume ?? "—"}`);
+  const pct = ticker.per_change ?? ticker.change_pct ?? ticker.changePercent;
+  const pctText = pct !== undefined && pct !== null ? ` • 1D ${Number(pct).toFixed(2)}%` : "";
+  text("liveMeta", `${payload.symbol} • Mark ${ticker.mark_price ?? "—"} • Volume ${ticker.volume ?? "—"}${pctText}`);
 }
 
 async function loadLive() {
