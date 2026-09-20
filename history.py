@@ -34,7 +34,14 @@ RETRIES = 1
 DEFAULT_LIMIT = 200
 
 _CACHE = {}
-_CACHE_TTL = 8
+_CACHE_TTL = 45
+
+# Kotak historical-data endpoint does not support MCX in this integration.
+# MCX instruments still have live quotes/options, but history must not be
+# requested repeatedly because Kotak returns HTTP 400 for that exchange.
+MCX_SYMBOLS = {"GOLD", "SILVER", "CRUDEOIL"}
+
+_TIMEFRAME_TTL = {"5m": 20, "15m": 45, "1h": 90, "1d": 300}
 
 
 def _empty():
@@ -165,10 +172,17 @@ def get_history(symbol="BTCUSD", resolution="5m", limit=200):
         return _fetch_delta_history(canonical, resolution, limit)
 
     if provider == "kotak_neo":
+        # MCX historical candles are rejected by Kotak's historical endpoint
+        # in the current Neo integration. Do not hammer the endpoint.
+        if canonical in MCX_SYMBOLS:
+            logger.info("HISTORY SKIP provider=kotak_neo symbol=%s tf=%s reason=MCX_HISTORY_UNSUPPORTED", canonical, resolution)
+            return _empty()
+
         key = ("kotak", canonical, resolution, int(limit))
         now = time.time()
+        ttl = _TIMEFRAME_TTL.get(str(resolution).lower(), _CACHE_TTL)
         cached = _CACHE.get(key)
-        if cached and now - cached[0] < _CACHE_TTL:
+        if cached and now - cached[0] < ttl:
             return cached[1].copy()
 
         df = kotak_get_history(canonical, resolution, limit)
@@ -210,27 +224,31 @@ def get_multi_timeframe_history(symbol, limit=DEFAULT_LIMIT):
     else:
         resolutions = RESOLUTIONS
 
-    with ThreadPoolExecutor(max_workers=len(resolutions)) as pool:
-        jobs = {
-            pool.submit(
-                get_history,
-                canonical,
-                tf,
-                limit,
-            ): tf
-            for tf in resolutions
-        }
-
-        for job in as_completed(jobs):
-            tf = jobs[job]
+    # Kotak rate-limits historical requests. Parallel requests for 5m/15m/1h/1d
+    # can trigger HTTP 429, especially on Render cold starts. Fetch sequentially
+    # and rely on the per-timeframe cache above.
+    if market and market.get("provider") == "kotak_neo":
+        for tf in resolutions:
             try:
-                result[tf] = job.result()
+                result[tf] = get_history(canonical, tf, limit)
+                time.sleep(0.20)
             except Exception:
                 logger.exception(
                     "TIMEFRAME ERROR symbol=%s tf=%s",
                     canonical,
                     tf,
                 )
+                result[tf] = _empty()
+        return result
+
+    with ThreadPoolExecutor(max_workers=len(resolutions)) as pool:
+        jobs = {pool.submit(get_history, canonical, tf, limit): tf for tf in resolutions}
+        for job in as_completed(jobs):
+            tf = jobs[job]
+            try:
+                result[tf] = job.result()
+            except Exception:
+                logger.exception("TIMEFRAME ERROR symbol=%s tf=%s", canonical, tf)
                 result[tf] = _empty()
 
     return result
