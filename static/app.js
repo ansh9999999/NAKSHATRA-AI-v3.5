@@ -1,4 +1,4 @@
-const APP_VERSION='6.0.1';
+const APP_VERSION='6.2.0';
 let symbol='NIFTY50',busy=false;
 const $=id=>document.getElementById(id);
 const esc=v=>String(v??'—').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'",'&#039;');
@@ -39,6 +39,28 @@ function renderOption(o,price){
  $('topPuts').innerHTML=oc.topPuts.map((r,i)=>row(r,i,'PE')).join('')||'<tr><td colspan="5">No put OI data</td></tr>';
  set('optionNote',oc.status==='OK'?'Live Kotak Neo expiry chain • Top 5 OI only':'Option chain unavailable — no stale signal');
 }
+function renderParticipant(d){
+ const fd=(d&&d.fii_dii&&d.fii_dii.rows)||[];
+ const fii=fd.find(x=>String(x.category||'').toUpperCase().includes('FII'))||{};
+ const dii=fd.find(x=>String(x.category||'').toUpperCase()==='DII')||{};
+ set('fiiNet',fii.net_cr==null?'—':`${fii.net_cr>=0?'+':''}${fmt(fii.net_cr,0)} Cr`);
+ set('diiNet',dii.net_cr==null?'—':`${dii.net_cr>=0?'+':''}${fmt(dii.net_cr,0)} Cr`);
+ const vx=d.india_vix||{}; set('indiaVix',vx.value==null?'—':fmt(vx.value,2));
+ const sent=d.sentiment||{}; set('positionSentiment',sent.bias||'—');
+ const score=num(sent.score); let impact='MIXED / DATA-DEPENDENT';
+ if(score!=null) impact=score>=1?'Potential risk-on support':score<=-1?'Potential risk-off pressure':'Mixed positioning — watch first-hour confirmation';
+ set('nextSessionImpact',impact); set('participantReason',(sent.reasons||[]).join(' • ')||sent.note||'NSE participant data unavailable');
+ set('participantStatus',d.status==='OK'?'● EOD DATA':'● NO DATA');
+ const oi=(d.participant_oi&&d.participant_oi.rows)||[];
+ const names=['FII','DII','PRO','CLIENT'];
+ function findVal(r,parts){for(const [k,v] of Object.entries(r||{})){const kk=String(k).toLowerCase().replace(/[_-]+/g,' '); if(parts.every(x=>kk.includes(x))) return num(v)} return null}
+ function participant(r){const s=JSON.stringify(r).toUpperCase(); for(const n of names) if(s.includes(n)) return n; return String(r.participant||r.Participant||'—').toUpperCase()}
+ const rows=oi.map(r=>{const long=findVal(r,['index','future','long']),short=findVal(r,['index','future','short']);return {p:participant(r),long,short,net:(long!=null&&short!=null?long-short:null)}}).filter(x=>x.p&&x.p!=='—');
+ $('participantRows').innerHTML=rows.length?rows.slice(0,8).map(x=>`<tr><td>${esc(x.p)}</td><td>${fmt(x.long,0)}</td><td>${fmt(x.short,0)}</td><td>${x.net==null?'—':fmt(x.net,0)}</td></tr>`).join(''):'<tr><td colspan="4">NSE participant-wise OI unavailable or schema changed.</td></tr>';
+}
+async function loadNSEIntelligence(){try{const r=await fetch(`/api/nse-intelligence?symbol=${encodeURIComponent(symbol)}&_=${Date.now()}`,{cache:'no-store'});const d=await r.json();renderParticipant(d)}catch(e){set('participantStatus','● ERROR');set('nextSessionImpact','NSE participant feed unavailable')}}
+async function loadOptions(){try{const r=await fetch(`/api/options?symbol=${encodeURIComponent(symbol)}&_=${Date.now()}`,{cache:'no-store'});const d=await r.json();if(d)renderOption(d, num($('price')?.textContent?.replace(/,/g,''))||0)}catch(e){set('optionStatus','● ERROR')}}
+
 function render(a){
  const x=a.analysis||{},t=a.ticker||{},o=x.option_chain||{},it=x.intraday_trend||{},ast=x.astrology||{},numx=x.numerology||{},sent=x.sentiment||{},ag=x.agreement_detail||{};
  const by={};(it.timeframes||[]).forEach(z=>by[z.timeframe]=z); const tr=x.technical?.trend||{};
@@ -70,7 +92,7 @@ async function load(){
   if(!r.ok) throw new Error(`HTTP ${r.status}`);
   const d=await r.json();
   if(d && (d.ticker || d.analysis)){
-    render(d);
+    render(d); loadOptions(); loadNSEIntelligence();
     if(d.status!=='OK' && d.analysis?.status!=='OK'){
       set('status','● DATA RISK');
       set('dataState','● DATA RISK');
@@ -90,4 +112,4 @@ async function load(){
 
 async function scanner(){try{const r=await fetch('/api/scanner?_='+Date.now(),{cache:'no-store'});const d=await r.json();const arr=Array.isArray(d)?d:(d.markets||[]);$('scanner').innerHTML=arr.map(x=>`<div class="scanner-row"><b>${esc(x.symbol)}</b><span>${esc(x.signal||x.recommendation||'WAIT')}</span><small>${esc(x.strength??x.confidence??'—')}</small></div>`).join('')||'No scanner data'}catch(e){$('scanner').textContent='Scanner unavailable'}}
 async function trades(){try{const r=await fetch('/api/history?_='+Date.now(),{cache:'no-store'});const d=await r.json();const arr=Array.isArray(d)?d:(d.history||[]);$('trades').innerHTML=(arr||[]).slice(-8).reverse().map(x=>`<tr><td>${esc(x.symbol)}</td><td>${esc(x.side)}</td><td>${esc(fmt(x.entry))}</td><td>${esc(fmt(x.pnl))}</td><td>${esc(x.status)}</td></tr>`).join('')||'<tr><td colspan="5">No trades yet</td></tr>';$('equitySummary').textContent=arr?.length?`${arr.length} recorded trades`:'No recorded trades'}catch(e){$('equitySummary').textContent='Trade history unavailable'}}
-document.querySelectorAll('.symbol').forEach(b=>b.onclick=()=>selectSymbol(b.dataset.symbol));$('refreshBtn')?.addEventListener('click',()=>{load();scanner();trades()});load();scanner();trades();setInterval(()=>{load();scanner()},10000);
+document.querySelectorAll('.symbol').forEach(b=>b.onclick=()=>selectSymbol(b.dataset.symbol));$('refreshBtn')?.addEventListener('click',()=>{load();scanner();trades();loadOptions();loadNSEIntelligence()});load();scanner();trades();loadOptions();loadNSEIntelligence();setInterval(()=>{load();scanner();loadOptions();loadNSEIntelligence()},30000);
