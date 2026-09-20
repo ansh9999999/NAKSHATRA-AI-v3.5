@@ -225,7 +225,7 @@ def calculate_decision(
         "votes": {
             "bullish": bullish_votes,
             "bearish": bearish_votes,
-            "neutral": 3 - directional_votes,
+            "neutral": 4 - directional_votes,
         },
 
         "weighted_score": round(weighted_score, 3),
