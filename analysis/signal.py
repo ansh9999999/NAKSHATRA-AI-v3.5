@@ -171,10 +171,20 @@ def generate_signal(data):
     momentum_result = analyze_momentum(entry_df)
     smart_money_result = analyze_smart_money(entry_df)
 
-    technical_score = max(0, min(100, abs(
-        trend_result["total_score"] + momentum_result["score"] + smart_money_result["score"]
-    )))
-    technical_signal = "BUY" if technical_score >= 85 else "SELL" if technical_score <= 25 else "NEUTRAL"
+    # Keep direction signed. The previous implementation used abs(score),
+    # which could turn a strong bearish technical score into a BUY.
+    raw_technical_score = (
+        _num(trend_result.get("total_score"))
+        + _num(momentum_result.get("score"))
+        + _num(smart_money_result.get("score"))
+    )
+    technical_score = min(100.0, abs(raw_technical_score) / 3.0)
+    if raw_technical_score >= 25:
+        technical_signal = "BUY"
+    elif raw_technical_score <= -25:
+        technical_signal = "SELL"
+    else:
+        technical_signal = "NEUTRAL"
     technical_result = {
         "signal": technical_signal, "confidence": technical_score, "trend": trend_result,
         "momentum": momentum_result, "smart_money": smart_money_result,
@@ -191,7 +201,15 @@ def generate_signal(data):
     astrology_result = analyze_astrology(timestamp)
     numerology_result = analyze_numerology(timestamp, symbol)
 
-    result = calculate_decision(technical_result, astrology_result, numerology_result)
+    # Option-chain direction is part of the final decision for Indian index
+    # derivatives. It must be passed into the decision engine rather than
+    # merely displayed as a separate panel.
+    result = calculate_decision(
+        technical_result,
+        astrology_result,
+        numerology_result,
+        option_chain,
+    )
     result["symbol"] = symbol
     result["price"] = spot
     result["time"] = str(timestamp)
@@ -201,7 +219,16 @@ def generate_signal(data):
     result["option_chain"] = option_chain
     result["intraday_trend"] = intraday
 
-    # Keep existing 3-module decision intact, but expose an explicit
-    # option-chain agreement instead of silently ignoring the chain.
-    result["agreement"] = result.get("agreement", "PARTIAL AGREEMENT")
+    # Explicit agreement between the final decision and option-chain state.
+    if option_chain.get("status") == "OK":
+        final_sig = str(result.get("recommendation", "WAIT")).upper()
+        oc_sig = str(option_chain.get("signal", "NEUTRAL")).upper()
+        if final_sig in ("BUY", "SELL") and ((final_sig == "BUY" and oc_sig == "BUY") or (final_sig == "SELL" and oc_sig == "SELL")):
+            result["option_agreement"] = "ALIGNED"
+        elif oc_sig == "NEUTRAL" or final_sig == "WAIT":
+            result["option_agreement"] = "NEUTRAL"
+        else:
+            result["option_agreement"] = "CONFLICT"
+    else:
+        result["option_agreement"] = "DATA RISK"
     return result
