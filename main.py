@@ -26,6 +26,8 @@ from analysis.signal import generate_signal
 from scanner import market_scan
 from market_registry import canonical_symbol, symbols
 from kotak_neo import get_quote
+from analysis.option_chain_engine import analyze_option_chain
+from nse_intelligence import get_nse_intelligence
 
 try:
     from delta import get_ticker as delta_get_ticker
@@ -241,6 +243,28 @@ def api_live(symbol: str = "BTCUSD", force: bool = False):
         "analysis": analysis,
         "server_time": time.time(),
     })
+
+
+@app.get("/api/options")
+def api_options(symbol: str = "NIFTY50"):
+    symbol = canonical_symbol(symbol)
+    ticker = _get_market_quote(symbol) or {}
+    spot = ticker.get("ltp") or ticker.get("price") or ticker.get("close")
+    try:
+        return _json_safe(analyze_option_chain(symbol, spot_price=spot))
+    except Exception as exc:
+        logger.exception("OPTION API ERROR %s", symbol)
+        return {"status":"ERROR","signal":"NEUTRAL","confidence":0,"reason":str(exc),"rows":[]}
+
+
+@app.get("/api/nse-intelligence")
+def api_nse_intelligence(symbol: str = "NIFTY50"):
+    symbol = canonical_symbol(symbol)
+    try:
+        return _json_safe(get_nse_intelligence(symbol))
+    except Exception as exc:
+        logger.exception("NSE INTELLIGENCE ERROR %s", symbol)
+        return {"status":"ERROR","symbol":symbol,"error":str(exc)}
 
 
 @app.get("/api/debug-data")
