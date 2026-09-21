@@ -176,18 +176,15 @@ def generate_signal(data):
         + momentum_result["score"]
         + smart_money_result["score"]
     )
-    # Preserve direction. The previous abs() could turn a strong bearish
-    # score into a high BUY score.
-    technical_score = max(-100, min(100, raw_technical))
-    technical_confidence = abs(technical_score)
-    if technical_score >= 35:
+    technical_score = max(0, min(100, abs(raw_technical)))
+    if raw_technical >= 25:
         technical_signal = "BUY"
-    elif technical_score <= -35:
+    elif raw_technical <= -25:
         technical_signal = "SELL"
     else:
         technical_signal = "NEUTRAL"
     technical_result = {
-        "signal": technical_signal, "confidence": technical_confidence, "score": technical_score, "trend": trend_result,
+        "signal": technical_signal, "confidence": technical_score, "trend": trend_result,
         "momentum": momentum_result, "smart_money": smart_money_result,
         "reasons": trend_result["reasons"] + momentum_result["reasons"] + smart_money_result["reasons"],
     }
@@ -202,12 +199,7 @@ def generate_signal(data):
     astrology_result = analyze_astrology(timestamp)
     numerology_result = analyze_numerology(timestamp, symbol)
 
-    result = calculate_decision(
-        technical_result,
-        astrology_result,
-        numerology_result,
-        option_chain_result=option_chain,
-    )
+    result = calculate_decision(technical_result, astrology_result, numerology_result, option_chain)
     result["symbol"] = symbol
     result["price"] = spot
     result["time"] = str(timestamp)
@@ -220,4 +212,62 @@ def generate_signal(data):
     # Keep existing 3-module decision intact, but expose an explicit
     # option-chain agreement instead of silently ignoring the chain.
     result["agreement"] = result.get("agreement", "PARTIAL AGREEMENT")
+
+    # Explicit, data-driven trade setup. A WAIT state still tells the user
+    # exactly what confirmation is required instead of leaving the card blank.
+    atr_value = _num(momentum_result.get("atr"), 0)
+    last = spot
+    recent_high = _num(entry_df["high"].tail(3).max(), last)
+    recent_low = _num(entry_df["low"].tail(3).min(), last)
+    oc = option_chain if isinstance(option_chain, dict) else {}
+    support = _num(oc.get("max_put_oi_support"), 0)
+    resistance = _num(oc.get("max_call_oi_resistance"), 0)
+    direction = str(result.get("direction", "NEUTRAL")).upper()
+    recommendation = str(result.get("recommendation", "WAIT")).upper()
+    buffer = max(0.05, atr_value * 0.10) if atr_value > 0 else max(0.05, last * 0.0002)
+
+    if recommendation == "BUY" and atr_value > 0:
+        entry = max(last, recent_high, resistance if resistance > last else 0) + buffer
+        sl = entry - 1.2 * atr_value
+        t1 = entry + 1.5 * (entry - sl)
+        t2 = entry + 2.5 * (entry - sl)
+        t3 = entry + 3.5 * (entry - sl)
+        result["trade_plan"] = {
+            "status": "READY", "side": "BUY", "entry_zone": f"{entry:.2f} or above",
+            "entry_trigger": round(entry, 2), "stop_loss": round(sl, 2),
+            "target1": round(t1, 2), "target2": round(t2, 2), "target3": round(t3, 2),
+            "risk_reward": "1 : 1.5 / 2.5 / 3.5",
+            "when": "After a 5m candle closes above the trigger with volume confirmation",
+            "basis": "AI direction + 5m structure + ATR"
+        }
+    elif recommendation == "SELL" and atr_value > 0:
+        entry = min(last, recent_low, support if support > 0 and support < last else last) - buffer
+        sl = entry + 1.2 * atr_value
+        t1 = entry - 1.5 * (sl - entry)
+        t2 = entry - 2.5 * (sl - entry)
+        t3 = entry - 3.5 * (sl - entry)
+        result["trade_plan"] = {
+            "status": "READY", "side": "SELL", "entry_zone": f"{entry:.2f} or below",
+            "entry_trigger": round(entry, 2), "stop_loss": round(sl, 2),
+            "target1": round(t1, 2), "target2": round(t2, 2), "target3": round(t3, 2),
+            "risk_reward": "1 : 1.5 / 2.5 / 3.5",
+            "when": "After a 5m candle closes below the trigger with volume confirmation",
+            "basis": "AI direction + 5m structure + ATR"
+        }
+    else:
+        if direction == "BULLISH":
+            trigger = max(recent_high, resistance if resistance > last else 0) + buffer
+            when = f"WAIT now • BUY only after 5m close above {trigger:.2f} + volume confirmation"
+        elif direction == "BEARISH":
+            trigger = min(recent_low, support if support > 0 and support < last else last) - buffer
+            when = f"WAIT now • SELL only after 5m close below {trigger:.2f} + volume confirmation"
+        else:
+            when = "WAIT now • No trade until 5m and 15m direction align with volume"
+        result["trade_plan"] = {
+            "status": "WAIT", "side": "WAIT", "entry_zone": "—",
+            "stop_loss": None, "target1": None, "target2": None, "target3": None,
+            "risk_reward": "—", "when": when,
+            "basis": "No high-quality confirmed entry yet"
+        }
+
     return result
