@@ -1,4 +1,4 @@
-const APP_VERSION='6.3.0';
+const APP_VERSION='6.5.0';
 let symbol='NIFTY50',busy=false;
 const $=id=>document.getElementById(id);
 const esc=v=>String(v??'—').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'",'&#039;');
@@ -27,11 +27,41 @@ function calcOption(o,spot){
  return {rows,atm,pcr,callOi,putOi,support,resistance,maxPain:num(o.max_pain),expiry:o.expiry||'—',status:String(o.status||'OK').toUpperCase(),view,topCalls,topPuts};
 }
 function renderTradePlan(x,price){
- const p=x.trade_plan||{}; let side=String(p.side||x.recommendation||'WAIT').toUpperCase();
+ const p=x.trade_plan||{};
+ const gamma=x.option_chain?.gamma_squeeze||{};
+ let side=String(p.side||x.recommendation||'WAIT').toUpperCase();
+ const px=num(price);
+ // If the core AI is WAIT but a squeeze setup is forming, show a conditional
+ // plan instead of blank fields. This tells the user what must happen first.
+ if((side==='WAIT'||side==='NO DATA'||side==='NEUTRAL') && (gamma.side==='CALL'||gamma.side==='PUT')){
+   const gside=gamma.side==='CALL'?'BUY CE':'BUY PE';
+   set('entryZone',gamma.trigger||'Wait for trigger');
+   set('stopLoss','Use trigger invalidation');
+   set('tp1','After confirmation');set('tp2','Trail if momentum continues');set('tp3','—');set('rr','Not fixed before trigger');
+   set('riskState',`${gside} • ONLY AFTER TRIGGER`);paint('riskState',gamma.side==='CALL'?'BULLISH':'BEARISH');
+   return;
+ }
  if(p.status==='READY'&&p.entry_zone){set('entryZone',p.entry_zone);set('stopLoss',fmt(p.stop_loss));set('tp1',fmt(p.target1));set('tp2',fmt(p.target2));set('tp3',fmt(p.target3));set('rr',p.risk_reward||'—');set('riskState',`${side} • ${p.when||p.basis||'AI risk model'}`);paint('riskState',side);return}
- const atr=num(p.atr??x.atr??x.technical?.atr??x.technical?.trend?.['5m']?.atr),px=num(price);
- if((side==='BUY'||side==='SELL')&&atr&&px){const risk=Math.max(1.2*atr,px*.0025),half=Math.max(.15*atr,px*.0005);set('entryZone',`${fmt(px-half)} – ${fmt(px+half)}`);if(side==='BUY'){set('stopLoss',fmt(px-risk));set('tp1',fmt(px+1.5*risk));set('tp2',fmt(px+2.5*risk));set('tp3',fmt(px+3.5*risk))}else{set('stopLoss',fmt(px+risk));set('tp1',fmt(px-1.5*risk));set('tp2',fmt(px-2.5*risk));set('tp3',fmt(px-3.5*risk))}set('rr','1 : 2.5');set('riskState',`${side} • ATR based`);return}
- ['entryZone','stopLoss','tp1','tp2','tp3','rr'].forEach(id=>set(id,'—'));set('riskState',p.when||'WAIT • No actionable trade plan');paint('riskState','WAIT');
+ const atr=num(p.atr??x.atr??x.technical?.atr??x.technical?.trend?.['5m']?.atr);
+ if((side==='BUY'||side==='SELL')&&atr&&px){const risk=Math.max(1.2*atr,px*.0025),half=Math.max(.15*atr,px*.0005);set('entryZone',`${fmt(px-half)} – ${fmt(px+half)}`);if(side==='BUY'){set('stopLoss',fmt(px-risk));set('tp1',fmt(px+1.5*risk));set('tp2',fmt(px+2.5*risk));set('tp3',fmt(px+3.5*risk))}else{set('stopLoss',fmt(px+risk));set('tp1',fmt(px-1.5*risk));set('tp2',fmt(px-2.5*risk));set('tp3',fmt(px-3.5*risk))}set('rr','1 : 2.5');set('riskState',`${side} • ATR based`);paint('riskState',side);return}
+ ['entryZone','stopLoss','tp1','tp2','tp3','rr'].forEach(id=>set(id,'—'));set('riskState','WAIT • No confirmed trade');paint('riskState','WAIT');
+}
+function renderGamma(g){
+ const x=g||{};
+ const risk=String(x.risk||'NO DATA').toUpperCase();
+ const side=String(x.side||'NO CLEAR SIDE').toUpperCase();
+ const status=String(x.status||'NO DATA').toUpperCase();
+ set('gammaStatus',status==='OK'?(x.expiry_day?'● EXPIRY DAY':'● LIVE'):'● NO DATA');
+ set('gammaRisk',risk==='HIGH'?'HIGH ALERT':risk==='ELEVATED'?'SETUP FORMING':risk==='WATCH'?'WATCH':risk==='LOW'?'WAIT':'NO DATA');
+ paint('gammaRisk',risk==='HIGH'?'BULLISH':risk==='ELEVATED'?'WAIT':risk==='WATCH'?'WAIT':'WAIT');
+ set('gammaSide',side);
+ paint('gammaSide',side==='CALL'?'BULLISH':side==='PUT'?'BEARISH':'WAIT');
+ set('gammaWindow',x.probable_window||'—');
+ const c=x.confirmations, total=x.confirmation_total||5;
+ set('gammaScore',c==null?'—':`${c}/${total}`);
+ set('gammaTrigger',x.trigger||'Wait for live option-chain confirmation.');
+ set('gammaReason',x.reason||'No squeeze condition confirmed.');
+ set('gammaWarning',x.warning||'Wait for the trigger.');
 }
 function renderOption(o,price){
  const oc=calcOption(o,price||0);set('expiry',`Expiry ${oc.expiry}`);set('optionStatus',oc.status==='OK'?'● LIVE':'● NO DATA');set('pcrOi',fmt(oc.pcr,3));set('pcrVol',fmt(o.volume_pcr??o.pcr_volume,3));set('atm',fmt(oc.atm,0));set('maxPain',fmt(oc.maxPain,0));set('support',fmt(oc.support??o.max_put_oi_support,0));set('resistance',fmt(oc.resistance??o.max_call_oi_resistance,0));set('optionView',oc.view);paint('optionView',oc.view);set('optionViewReason',o.reason||'OI positioning snapshot');$('optionView').className=biasClass(oc.view);
@@ -39,6 +69,7 @@ function renderOption(o,price){
  $('topCalls').innerHTML=oc.topCalls.map((r,i)=>row(r,i,'CE')).join('')||'<tr><td colspan="5">No call OI data</td></tr>';
  $('topPuts').innerHTML=oc.topPuts.map((r,i)=>row(r,i,'PE')).join('')||'<tr><td colspan="5">No put OI data</td></tr>';
  set('optionNote',oc.status==='OK'?`${oc.source||'Live'} expiry chain • Top 5 OI`:'Option chain unavailable — no stale signal');
+ renderGamma(o.gamma_squeeze);
 }
 function renderParticipant(d){
  const fd=(d&&d.fii_dii&&d.fii_dii.rows)||[];
@@ -62,7 +93,7 @@ async function loadOptions(){try{const r=await fetch(`/api/options?symbol=${enco
 function render(a){
  const x=a.analysis||{},t=a.ticker||{},o=x.option_chain||{},it=x.intraday_trend||{},ast=x.astrology||{},numx=x.numerology||{},sent=x.sentiment||{},ag=x.agreement_detail||{};
  const by={};(it.timeframes||[]).forEach(z=>by[z.timeframe]=z); const tr=x.technical?.trend||{};
- const price=num(t.ltp??t.price??t.close??x.price); let perChange=num(t.percent_change??t.per_change??t.perChange??t.change_24h); if(perChange===null){const prev=num(t.close), px=num(t.ltp??t.price); if(prev&&px) perChange=((px-prev)/prev)*100;}
+ const price=num(t.ltp??t.price??t.close??x.price); let perChange=num(t.percent_change??t.per_change??t.perChange??t.change_24h); if(perChange===null){const prev=num(t.previous_close??t.prev_close??t.close); const px=num(t.ltp??t.price); if(prev&&px&&Math.abs(px-prev)>0) perChange=((px-prev)/prev)*100;}
  set('marketSymbol',symbol==='NIFTY50'?'NIFTY 50':symbol.replace('CRUDEOIL','CRUDE OIL'));set('price',fmt(price));set('change',perChange===null?'1D change unavailable':`1D ${perChange>=0?'▲':'▼'} ${fmt(Math.abs(perChange))}%`);set('dayChange',perChange===null?'—':`${perChange>=0?'▲':'▼'} ${fmt(Math.abs(perChange))}%`);set('dayChangePct',t.change!=null?`${t.change>=0?'+':''}${fmt(t.change)}`:'—');paint('change',perChange>=0?'BULLISH':'BEARISH');paint('dayChange',perChange>=0?'BULLISH':'BEARISH');paint('dayChangePct',perChange>=0?'BULLISH':'BEARISH');set('dayHigh',fmt(t.high??x.day_high));set('dayLow',fmt(t.low??x.day_low));set('dayVolume',fmt(t.volume,0));set('openInterest',fmt(t.oi??x.open_interest,0));
  const decision=String(x.recommendation||x.signal||'WAIT').toUpperCase();set('decision',decision);paint('decision',decision);paint('whyDecision',decision);set('whyDecision',decision);const conf=num(x.confidence??x.overall_confidence);set('confidence',`Strength ${fmt(conf,0)}/100`);if($('confidenceBar')){$('confidenceBar').style.width=`${Math.max(0,Math.min(100,conf||0))}%`;$('confidenceBar').className=biasClass(decision)}
  set('agreementMini',`Agreement ${ag.final||x.agreement||'—'}`);set('agreementMini2',ag.final||x.agreement||'—');
