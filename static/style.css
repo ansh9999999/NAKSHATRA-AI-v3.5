@@ -9,5 +9,12 @@
 .participant-grid small,.participant-impact small{display:block;color:#8ea1bb;font-size:10px;letter-spacing:.08em}
 .participant-grid b{display:block;margin-top:5px;font-size:18px}
 .participant-impact{display:flex;gap:12px;align-items:center;flex-wrap:wrap;padding:12px;border-radius:12px;background:rgba(123,73,255,.08);border:1px solid rgba(145,90,255,.22)}
-.participant-impact strong{color:#d7c9ff}.participant-impact span{font-weight:700}.participant-table-wrap{overflow:auto;margin-top:12px}.participant-table-wrap table{width:100%;min-width:520px;border-collapse:collapse}.participant-table-wrap th,.participant-table-wrap td{padding:8px;border-bottom:1px solid rgba(255,255,255,.07);font-size:12px;text-align:right}.participant-table-wrap th:first-child,.participant-table-wrap td:first-child{text-align:left}
+.participant-impact strong{color:#d7c9ff}.participant-impact span{font-weight:700}.participant-table-wrap{overflow:auto;margin-top:12px}.participant-table-wrap table{width:100%;min-width:760px;border-collapse:collapse}.participant-table-wrap th,.participant-table-wrap td{padding:8px;border-bottom:1px solid rgba(255,255,255,.07);font-size:12px;text-align:right}.participant-table-wrap th:first-child,.participant-table-wrap td:first-child{text-align:left}
 @media(max-width:700px){.participant-grid{grid-template-columns:repeat(2,1fr)}.participant-grid b{font-size:15px}.participant-impact{align-items:flex-start;flex-direction:column}}
+/* V2.4 signal semantics: bullish=green, bearish/sell=orange, wait=amber */
+.bull{color:#22e68a!important}.bear{color:#ff9f43!important}.wait{color:#ffd166!important}
+.change.bull,.day-change b.bull,.day-change span.bull{color:#22e68a!important}.change.bear,.day-change b.bear,.day-change span.bear{color:#ff9f43!important}
+.decision-card>strong.bull{color:#22e68a!important}.decision-card>strong.bear{color:#ff9f43!important}.decision-card>strong.wait{color:#ffd166!important}
+.confidence-bar .bull{background:#22e68a!important}.confidence-bar .bear{background:#ff9f43!important}.confidence-bar .wait{background:#ffd166!important}
+.trade-plan{position:relative}.trade-plan .section-head span{max-width:72%;text-align:right;line-height:1.35}.trade-plan .section-head span.wait{font-weight:900}
+.option-view.bull{border-color:#1b8f64!important}.option-view.bear{border-color:#a86220!important}.option-view.wait{border-color:#8b6b18!important}
