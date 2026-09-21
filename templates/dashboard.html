@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>NAKSHATRA AI • Indian Market</title>
-<link rel="stylesheet" href="/static/style.css?v=6.3.0">
+<link rel="stylesheet" href="/static/style.css?v=6.5.0">
 </head>
 <body><div class="container">
 <header class="topbar">
@@ -46,6 +46,22 @@
 
 <section class="card option-card"><div class="section-head"><div><h2>📊 Option Chain Intelligence <small>(Top 5 OI)</small></h2><small id="optionNote">Live Kotak Neo option positioning</small></div><div class="option-head-right"><span id="optionStatus">—</span><span id="expiry">Expiry —</span></div></div><div class="option-overview"><div><small>PCR OI</small><b id="pcrOi">—</b></div><div><small>PCR VOL</small><b id="pcrVol">—</b></div><div><small>ATM</small><b id="atm">—</b></div><div><small>MAX PAIN</small><b id="maxPain">—</b></div><div><small>SUPPORT</small><b id="support">—</b></div><div><small>RESISTANCE</small><b id="resistance">—</b></div><div class="option-view"><small>OPTION CHAIN VIEW</small><b id="optionView">—</b><span id="optionViewReason">—</span></div></div><div class="top5-grid"><div class="top5 calls"><h3>Top 5 Call OI <span>(Resistance)</span></h3><table><thead><tr><th>#</th><th>Strike</th><th>CE OI</th><th>CE LTP</th><th>ΔOI</th></tr></thead><tbody id="topCalls"></tbody></table></div><div class="top5 puts"><h3>Top 5 Put OI <span>(Support)</span></h3><table><thead><tr><th>#</th><th>Strike</th><th>PE OI</th><th>PE LTP</th><th>ΔOI</th></tr></thead><tbody id="topPuts"></tbody></table></div></div></section>
 
+<section class="card gamma-card">
+  <div class="section-head">
+    <div><h2>⚡ Squeeze / Gamma Alert</h2><small>Simple confirmation-based alert</small></div>
+    <span id="gammaStatus">—</span>
+  </div>
+  <div class="gamma-main">
+    <div><small>SETUP</small><b id="gammaRisk">WAIT</b></div>
+    <div><small>SIDE</small><b id="gammaSide">—</b></div>
+    <div><small>WATCH WINDOW</small><b id="gammaWindow">—</b></div>
+    <div><small>CONFIRMATIONS</small><b id="gammaScore">—</b></div>
+  </div>
+  <div class="gamma-trigger"><strong>WHEN TO ACT</strong><span id="gammaTrigger">Wait for live option-chain confirmation.</span></div>
+  <div class="gamma-reason" id="gammaReason">No squeeze condition confirmed.</div>
+  <div class="gamma-warning" id="gammaWarning">No exact blast time is promised. Wait for the trigger.</div>
+</section>
+
 <section class="card participant-card"><div class="section-head"><div><h2>🏦 Institutional & Pro Positioning</h2><small id="participantSource">NSE EOD participant data</small></div><span id="participantStatus">—</span></div><div class="participant-grid"><div><small>FII/FPI NET CASH</small><b id="fiiNet">—</b></div><div><small>DII NET CASH</small><b id="diiNet">—</b></div><div><small>INDIA VIX</small><b id="indiaVix">—</b></div><div><small>POSITIONING SENTIMENT</small><b id="positionSentiment">—</b></div></div><div class="participant-impact"><strong>Next Trading Session Impact</strong><span id="nextSessionImpact">Waiting for NSE participant data…</span><small id="participantReason">FII/DII cash flow + participant-wise F&O positioning; EOD data is not a live order-flow feed.</small></div><div class="participant-table-wrap"><table><thead><tr><th>Participant</th><th>Index Fut Long</th><th>Index Fut Short</th><th>Fut Net</th><th>Index CE Net</th><th>Index PE Net</th></tr></thead><tbody id="participantRows"><tr><td colspan="6">Loading NSE participant data…</td></tr></tbody></table></div></section>
 
 <section class="split-grid"><section class="card"><div class="section-head"><h2>🗓 Next Market Catalyst (IST)</h2><span id="eventRisk">NORMAL</span></div><div id="catalyst" class="catalyst"></div><div class="news-note" id="eventDisclaimer"></div></section><section class="card"><div class="section-head"><h2>🎯 Why AI Says <span id="whyDecision">WAIT</span></h2><span id="agreementMini2">—</span></div><div id="reasons" class="reason-list"></div></section></section>
@@ -59,4 +75,4 @@
 </aside>
 </main>
 <footer><span>NAKSHATRA AI • Indian Market • Kotak Neo</span><span>Auto refresh 10s</span></footer>
-</div><script src="/static/app.js?v=6.3.0"></script></body></html>
+</div><script src="/static/app.js?v=6.5.0"></script></body></html>
