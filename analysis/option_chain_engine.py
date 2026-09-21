@@ -106,6 +106,9 @@ def _analyze_rows(symbol, rows, spot_price=None, expiry=None, source="unknown"):
     top_calls = sorted(calls, key=lambda r: _num(r.get("oi")), reverse=True)[:5]
     top_puts = sorted(puts, key=lambda r: _num(r.get("oi")), reverse=True)[:5]
 
+    from analysis.gamma_squeeze_engine import detect_squeeze
+    squeeze = detect_squeeze(symbol, rows, spot, expiry)
+
     return {
         "status": "OK",
         "signal": signal,
@@ -133,6 +136,7 @@ def _analyze_rows(symbol, rows, spot_price=None, expiry=None, source="unknown"):
             for r in top_puts
         ],
         "rows": rows,
+        "gamma_squeeze": squeeze,
         "reason": f"PCR {pcr:.2f} • {source}" if pcr is not None else f"PCR unavailable • {source}",
     }
 
