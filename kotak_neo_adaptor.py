@@ -431,8 +431,9 @@ def get_quote(symbol: str = "NIFTY50") -> dict[str, Any]:
             "close": float(ohlc.get("close", 0) or 0),
             "volume": float(item.get("last_volume", 0) or 0),
             "oi": float(item.get("open_int", 0) or 0),
-            "change": float(item.get("change", 0) or 0),
-            "per_change": float(item.get("per_change", 0) or 0),
+            "change": float(item.get("change", item.get("net_change", 0)) or 0),
+            "per_change": float(item.get("per_change", item.get("perChange", item.get("net_change_percentage", 0))) or 0),
+            "percent_change": float(item.get("per_change", item.get("perChange", item.get("net_change_percentage", 0))) or 0),
             "raw": item,
         }
     except Exception as exc:
@@ -441,19 +442,8 @@ def get_quote(symbol: str = "NIFTY50") -> dict[str, Any]:
 
 
 def get_option_chain(symbol: str = "NIFTY50", expiry: str | None = None) -> list[dict[str, Any]]:
-    """Return normalized option-chain rows using Kotak Neo SDK v3.x.
-
-    Kotak Neo v3.x option_chain() is an underlying-based market-data endpoint:
-        client.option_chain(exchange, underlying, expiry=None,
-                            instrument_type="option", count=40)
-
-    It does NOT require an index cash-market token or the scrip-master
-    resolver.  The previous implementation incorrectly tried to resolve the
-    underlying through the cash-market scrip master and then passed the wrong
-    keyword arguments to option_chain().
-    """
+    """Return normalized option-chain rows from the current Kotak Neo SDK."""
     symbol = _clean_symbol(symbol)
-
     meta = {
         "NIFTY50": ("nse_fo", "NIFTY"),
         "BANKNIFTY": ("nse_fo", "BANKNIFTY"),
@@ -462,122 +452,94 @@ def get_option_chain(symbol: str = "NIFTY50", expiry: str | None = None) -> list
     }
     if symbol not in meta:
         return []
-
     exchange, underlying = meta[symbol]
-
     try:
         client = _sdk_client()
-        # option_chain() is consumer-key authenticated market data and does
-        # not require a completed TOTP session according to the v3.x SDK.
         fn = getattr(client, "option_chain", None)
         if not callable(fn):
             raise RuntimeError("Installed Kotak Neo SDK has no option_chain().")
 
-        kwargs = {
-            "exchange": exchange,
-            "underlying": underlying,
-            "instrument_type": "option",
-            "count": 40,
-        }
-        if expiry:
-            kwargs["expiry"] = str(expiry)
+        attempts = [
+            {"exchange": exchange, "underlying": underlying, "expiry": expiry, "instrument_type": "option", "count": 80},
+            {"exchange": exchange, "underlying": underlying, "instrument_type": "option", "count": 80},
+            {"exchange": exchange, "underlying": underlying, "expiry": expiry, "instrument_type": "OPTIDX", "count": 80},
+        ]
+        payload = None
+        last_exc = None
+        for kwargs in attempts:
+            kwargs = {k:v for k,v in kwargs.items() if v is not None}
+            try:
+                payload = fn(**kwargs)
+                if payload is not None:
+                    break
+            except TypeError as exc:
+                last_exc = exc
+                continue
+        if payload is None:
+            raise last_exc or RuntimeError("Kotak option_chain returned no response")
 
-        payload = fn(**kwargs)
+        def walk(v):
+            if isinstance(v, dict):
+                yield v
+                for x in v.values():
+                    yield from walk(x)
+            elif isinstance(v, list):
+                for x in v:
+                    yield from walk(x)
 
-        if not isinstance(payload, dict):
-            logger.warning("Kotak Neo option chain returned unexpected type for %s: %s", symbol, type(payload).__name__)
-            return []
-
-        data = payload.get("data")
+        objs = list(walk(payload))
+        data = payload.get("data") if isinstance(payload, dict) else None
         if not isinstance(data, dict):
-            data = payload.get("result") if isinstance(payload.get("result"), dict) else {}
-
+            data = payload.get("result") if isinstance(payload, dict) and isinstance(payload.get("result"), dict) else {}
         common = data.get("common_data") or data.get("commonData") or {}
         chain_expiry = common.get("expiryDt") or common.get("expiry") or expiry
 
-        rows: list[dict[str, Any]] = []
+        rows=[]
+        def first(obj, *keys):
+            if not isinstance(obj, dict): return None
+            low={str(k).lower():v for k,v in obj.items()}
+            for k in keys:
+                if k in obj and obj[k] not in (None, ""): return obj[k]
+                v=low.get(str(k).lower())
+                if v not in (None, ""): return v
+            return None
 
-        for side, option_type in (("call", "CALL"), ("put", "PUT")):
-            items = data.get(side) or []
+        # Preferred documented structure: data.call / data.put.
+        for side, typ in (("call", "CALL"), ("put", "PUT")):
+            items = data.get(side) or data.get(side + "s") or []
             if not isinstance(items, list):
                 continue
-
             for item in items:
-                if not isinstance(item, dict):
-                    continue
+                if not isinstance(item, dict): continue
+                inst=item.get("instrument") or item.get("inst") or {}
+                quote=item.get("quote") or {}
+                oi_data=item.get("openInterest") or item.get("oi") or {}
+                strike=first(inst,"strikePrice","strike_price","strike") or first(item,"strikePrice","strike_price","strike")
+                oi=first(oi_data,"current","oi","openInterest") if isinstance(oi_data,dict) else oi_data
+                ltp=first(quote,"ltp","lastTradedPrice","last_price","price") if isinstance(quote,dict) else None
+                vol=first(quote,"volume","last_volume","totalTradedVolume") if isinstance(quote,dict) else None
+                oic=first(oi_data,"change","changeInOI","chngInOI") if isinstance(oi_data,dict) else None
+                try: strike=float(strike)
+                except Exception: continue
+                rows.append({"symbol": first(inst,"symbol","tradingSymbol") or first(item,"symbol","trading_symbol"), "type":typ,"strike":strike,"oi":_to_float(oi) or 0.0,"volume":_to_float(vol) or 0.0,"ltp":_to_float(ltp) or 0.0,"oi_change":_to_float(oic) or 0.0,"expiry":chain_expiry})
 
-                instrument = item.get("instrument") or item.get("inst") or {}
-                quote = item.get("quote") or {}
-                oi_data = item.get("openInterest") or item.get("oi") or {}
+        # Generic fallback for alternative response shapes.
+        if not rows:
+            for obj in objs:
+                strike=first(obj,"strikePrice","strike_price","Strike_Price","strike")
+                if strike in (None,""): continue
+                c_oi=first(obj,"CALLS_OI","call_oi","ce_oi")
+                p_oi=first(obj,"PUTS_OI","put_oi","pe_oi")
+                if c_oi is None and p_oi is None: continue
+                exp=first(obj,"expiryDt","expiry","Expiry_Date") or chain_expiry
+                try: strike=float(strike)
+                except Exception: continue
+                rows.append({"symbol":first(obj,"symbol","trading_symbol"),"type":"CALL","strike":strike,"oi":_to_float(c_oi) or 0.0,"volume":_to_float(first(obj,"CALLS_Volume","call_volume","ce_volume")) or 0.0,"ltp":_to_float(first(obj,"CALLS_LTP","call_ltp","ce_ltp")) or 0.0,"oi_change":_to_float(first(obj,"CALLS_Chng_in_OI","call_oi_change","ce_oi_change")) or 0.0,"expiry":exp})
+                rows.append({"symbol":first(obj,"symbol","trading_symbol"),"type":"PUT","strike":strike,"oi":_to_float(p_oi) or 0.0,"volume":_to_float(first(obj,"PUTS_Volume","put_volume","pe_volume")) or 0.0,"ltp":_to_float(first(obj,"PUTS_LTP","put_ltp","pe_ltp")) or 0.0,"oi_change":_to_float(first(obj,"PUTS_Chng_in_OI","put_oi_change","pe_oi_change")) or 0.0,"expiry":exp})
 
-                strike = (
-                    instrument.get("strikePrice")
-                    if isinstance(instrument, dict)
-                    else None
-                )
-                if strike in (None, ""):
-                    strike = item.get("strike_price", item.get("strike"))
-
-                oi = (
-                    oi_data.get("current")
-                    if isinstance(oi_data, dict)
-                    else oi_data
-                )
-                volume = (
-                    quote.get("volume")
-                    if isinstance(quote, dict)
-                    else 0
-                )
-                ltp = (
-                    quote.get("ltp")
-                    if isinstance(quote, dict)
-                    else 0
-                )
-
-                try:
-                    strike_value = float(strike)
-                except Exception:
-                    continue
-
-                try:
-                    oi_value = float(oi or 0)
-                except Exception:
-                    oi_value = 0.0
-
-                try:
-                    volume_value = float(volume or 0)
-                except Exception:
-                    volume_value = 0.0
-
-                try:
-                    ltp_value = float(ltp or 0)
-                except Exception:
-                    ltp_value = 0.0
-
-                trading_symbol = (
-                    instrument.get("symbol")
-                    if isinstance(instrument, dict)
-                    else None
-                ) or item.get("trading_symbol") or item.get("symbol")
-
-                rows.append({
-                    "symbol": trading_symbol,
-                    "type": option_type,
-                    "strike": strike_value,
-                    "oi": oi_value,
-                    "volume": volume_value,
-                    "ltp": ltp_value,
-                    "expiry": chain_expiry,
-                    "raw": item,
-                })
-
-        rows.sort(key=lambda r: (float(r["strike"]), 0 if r["type"] == "CALL" else 1))
-        logger.info(
-            "KOTAK OPTION CHAIN OK %s exchange=%s underlying=%s expiry=%s rows=%s",
-            symbol, exchange, underlying, chain_expiry, len(rows)
-        )
+        rows.sort(key=lambda r:(float(r["strike"]),0 if r["type"]=="CALL" else 1))
+        logger.info("KOTAK OPTION CHAIN OK %s expiry=%s rows=%s",symbol,chain_expiry,len(rows))
         return rows
-
     except Exception as exc:
         logger.warning("Kotak Neo option chain failed for %s: %s", symbol, exc)
         return []
