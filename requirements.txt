@@ -7,6 +7,6 @@ python-dotenv
 apscheduler
 jinja2
 python-multipart
-kotakneoapi>=3.0.6,<4
+kotakneoapi>=3.0.7,<4
 pyotp>=2.9,<3
 nselib>=2.5.1
