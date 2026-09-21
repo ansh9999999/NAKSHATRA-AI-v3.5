@@ -93,11 +93,47 @@ def _fii_dii():
     return _cached("fii_dii", load)
 
 
+def _participant_rows(df):
+    rows = df if isinstance(df, list) else _safe_records(df)
+    out = []
+    for r in rows:
+        def get(*names):
+            for name in names:
+                if name in r and r[name] is not None:
+                    return _num(r[name])
+                # tolerant normalized lookup
+                nk = "".join(ch for ch in name.lower() if ch.isalnum())
+                for k, v in r.items():
+                    kk = "".join(ch for ch in str(k).lower() if ch.isalnum())
+                    if kk == nk:
+                        return _num(v)
+            return None
+        p = r.get("Client Type") or r.get("clientType") or r.get("Client_Type") or r.get("participant") or r.get("Participant")
+        p = str(p or "").strip().upper()
+        if not p:
+            continue
+        # NSE participant-wise OI schema: FII, DII, PRO, CLIENT.
+        out.append({
+            "participant": p,
+            "future_index_long": get("Future Index Long", "Future_Index_Long"),
+            "future_index_short": get("Future Index Short", "Future_Index_Short"),
+            "future_stock_long": get("Future Stock Long", "Future_Stock_Long"),
+            "future_stock_short": get("Future Stock Short", "Future_Stock_Short"),
+            "index_call_long": get("Option Index Call Long", "Option_Index_Call_Long"),
+            "index_call_short": get("Option Index Call Short", "Option_Index_Call_Short"),
+            "index_put_long": get("Option Index Put Long", "Option_Index_Put_Long"),
+            "index_put_short": get("Option Index Put Short", "Option_Index_Put_Short"),
+        })
+    return out
+
 def _participant_oi():
     def load():
         try:
             from nselib import derivatives
-            return _last_report(derivatives.participant_wise_open_interest)
+            raw = _last_report(derivatives.participant_wise_open_interest)
+            if raw.get("rows"):
+                raw["rows"] = _participant_rows(raw["rows"])
+            return raw
         except Exception as exc:
             return {"status": "ERROR", "error": str(exc), "rows": []}
     return _cached("participant_oi", load)
@@ -107,7 +143,8 @@ def _participant_volume():
     def load():
         try:
             from nselib import derivatives
-            return _last_report(derivatives.participant_wise_trading_volume)
+            raw = _last_report(derivatives.participant_wise_trading_volume)
+            return raw
         except Exception as exc:
             return {"status": "ERROR", "error": str(exc), "rows": []}
     return _cached("participant_volume", load)
@@ -165,4 +202,4 @@ def _sentiment(fii_dii, vix):
 
 def get_nse_intelligence(symbol="NIFTY50"):
     fii_dii=_fii_dii(); oi=_participant_oi(); vol=_participant_volume(); vix=_india_vix()
-    return {"status":"OK","symbol":symbol,"as_of":fii_dii.get("rows",[{}])[0].get("date") if fii_dii.get("rows") else oi.get("date"),"fii_dii":fii_dii,"participant_oi":oi,"participant_volume":vol,"india_vix":vix,"sentiment":_sentiment(fii_dii,vix)}
+    return {"status":"OK","symbol":symbol,"as_of":fii_dii.get("rows",[{}])[-1].get("date") if fii_dii.get("rows") else oi.get("date"),"fii_dii":fii_dii,"participant_oi":oi,"participant_volume":vol,"india_vix":vix,"sentiment":_sentiment(fii_dii,vix)}
