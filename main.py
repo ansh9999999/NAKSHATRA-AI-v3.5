@@ -175,7 +175,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="NAKSHATRA AI",
-    version="5.4",
+    version="5.5",
     lifespan=lifespan,
 )
 
@@ -254,7 +254,7 @@ def api_options(symbol: str = "NIFTY50"):
         return _json_safe(analyze_option_chain(symbol, spot_price=spot))
     except Exception as exc:
         logger.exception("OPTION API ERROR %s", symbol)
-        return {"status":"ERROR","signal":"NEUTRAL","confidence":0,"reason":str(exc),"rows":[]}
+        return {"status":"ERROR","signal":"NEUTRAL","confidence":0,"reason":str(exc),"source":"exception","rows":[]}
 
 
 @app.get("/api/nse-intelligence")
