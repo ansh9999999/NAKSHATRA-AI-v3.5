@@ -26,119 +26,13 @@ def _option_chain_analysis(symbol: str, spot: float) -> dict:
         return {"status": "NOT_APPLICABLE", "signal": "NEUTRAL", "confidence": 0,
                 "reason": "Option chain is available for Indian index derivatives only."}
     try:
-        from kotak_neo_adaptor import get_option_chain
-        rows = get_option_chain(symbol)
+        # Use the same unified engine as /api/options so the dashboard and
+        # decision engine cannot disagree about whether option-chain data exists.
+        from analysis.option_chain_engine import analyze_option_chain
+        return analyze_option_chain(symbol, spot_price=spot)
     except Exception as exc:
         return {"status": "ERROR", "signal": "NEUTRAL", "confidence": 0,
-                "reason": f"Option-chain fetch failed: {exc}"}
-
-    if not rows:
-        return {"status": "NO DATA", "signal": "NEUTRAL", "confidence": 0,
-                "reason": "Kotak Neo returned no option-chain rows."}
-
-    calls = [r for r in rows if str(r.get("type", "")).upper() == "CALL"]
-    puts = [r for r in rows if str(r.get("type", "")).upper() == "PUT"]
-    if not calls or not puts:
-        return {"status": "NO DATA", "signal": "NEUTRAL", "confidence": 0,
-                "reason": f"Incomplete option chain: calls={len(calls)} puts={len(puts)}"}
-
-    call_oi = sum(_num(r.get("oi")) for r in calls)
-    put_oi = sum(_num(r.get("oi")) for r in puts)
-    call_vol = sum(_num(r.get("volume")) for r in calls)
-    put_vol = sum(_num(r.get("volume")) for r in puts)
-    pcr = put_oi / call_oi if call_oi else 0.0
-    volume_pcr = put_vol / call_vol if call_vol else 0.0
-
-    strikes = sorted({round(_num(r.get("strike")), 2) for r in rows if _num(r.get("strike")) > 0})
-    atm = min(strikes, key=lambda s: abs(s - spot)) if strikes and spot > 0 else (strikes[len(strikes)//2] if strikes else 0)
-
-    max_put = max(puts, key=lambda r: _num(r.get("oi")), default={})
-    max_call = max(calls, key=lambda r: _num(r.get("oi")), default={})
-    support = _num(max_put.get("strike"))
-    resistance = _num(max_call.get("strike"))
-
-    # Standard max-pain calculation over the available strikes.
-    max_pain = None
-    best_loss = None
-    for settlement in strikes:
-        loss = 0.0
-        for r in calls:
-            loss += max(0.0, settlement - _num(r.get("strike"))) * _num(r.get("oi"))
-        for r in puts:
-            loss += max(0.0, _num(r.get("strike")) - settlement) * _num(r.get("oi"))
-        if best_loss is None or loss < best_loss:
-            best_loss, max_pain = loss, settlement
-
-    score = 0
-    reasons = []
-    if pcr >= 1.20:
-        score += 25; reasons.append(f"PCR {pcr:.2f} is bullish")
-    elif pcr >= 1.00:
-        score += 10; reasons.append(f"PCR {pcr:.2f} mildly bullish")
-    elif pcr <= 0.75:
-        score -= 25; reasons.append(f"PCR {pcr:.2f} is bearish")
-    elif pcr < 1.00:
-        score -= 10; reasons.append(f"PCR {pcr:.2f} mildly bearish")
-
-    if volume_pcr >= 1.10:
-        score += 10; reasons.append(f"Volume PCR {volume_pcr:.2f} supports buyers")
-    elif volume_pcr <= 0.80:
-        score -= 10; reasons.append(f"Volume PCR {volume_pcr:.2f} supports sellers")
-
-    if spot and support and spot > support:
-        reasons.append(f"Put OI support {support:g} below spot")
-    if spot and resistance and spot < resistance:
-        reasons.append(f"Call OI resistance {resistance:g} above spot")
-
-    score = max(-35, min(35, score))
-    if score >= 20:
-        signal = "BUY"
-    elif score <= -20:
-        signal = "SELL"
-    else:
-        signal = "NEUTRAL"
-
-    confidence = int(round(abs(score) / 35 * 100))
-    top_call = sorted(calls, key=lambda r: _num(r.get("oi")), reverse=True)[:5]
-    top_put = sorted(puts, key=lambda r: _num(r.get("oi")), reverse=True)[:5]
-    near_strikes = sorted(strikes, key=lambda s: abs(s - atm))[:11]
-    by_strike = {}
-    for r in rows:
-        by_strike.setdefault(_num(r.get("strike")), {})[str(r.get("type", "")).upper()] = r
-    atm_chain = []
-    for strike in sorted(near_strikes):
-        c = by_strike.get(strike, {}).get("CALL", {})
-        p = by_strike.get(strike, {}).get("PUT", {})
-        atm_chain.append({
-            "strike": strike,
-            "call_ltp": _num(c.get("ltp")), "call_oi": round(_num(c.get("oi"))),
-            "call_volume": round(_num(c.get("volume"))),
-            "put_ltp": _num(p.get("ltp")), "put_oi": round(_num(p.get("oi"))),
-            "put_volume": round(_num(p.get("volume"))),
-            "atm": abs(strike-atm) < 0.001,
-        })
-
-    return {
-        "status": "OK",
-        "signal": signal,
-        "confidence": confidence,
-        "reason": " • ".join(reasons[:4]) or "Live Kotak Neo option-chain data",
-        "expiry": rows[0].get("expiry"),
-        "pcr": round(pcr, 3),
-        "volume_pcr": round(volume_pcr, 3),
-        "atm_strike": atm,
-        "max_put_oi_support": support,
-        "max_call_oi_resistance": resistance,
-        "max_pain": max_pain,
-        "call_oi": round(call_oi),
-        "put_oi": round(put_oi),
-        "call_volume": round(call_vol),
-        "put_volume": round(put_vol),
-        "top_call_oi": [{"strike": _num(r.get("strike")), "oi": round(_num(r.get("oi"))), "ltp": _num(r.get("ltp"))} for r in top_call],
-        "top_put_oi": [{"strike": _num(r.get("strike")), "oi": round(_num(r.get("oi"))), "ltp": _num(r.get("ltp"))} for r in top_put],
-        "atm_chain": atm_chain,
-        "rows": rows,
-    }
+                "reason": f"Option-chain fetch failed: {exc}", "source": "exception", "rows": []}
 
 
 def _intraday_summary(trend_result: dict) -> dict:
@@ -200,6 +94,31 @@ def generate_signal(data):
     numerology_result = analyze_numerology(timestamp, symbol)
 
     result = calculate_decision(technical_result, astrology_result, numerology_result, option_chain)
+
+    # Data-quality gate: for Indian index decisions, a live CE+PE option-chain
+    # is a required confirmation layer. Never present a BUY/SELL as actionable
+    # when that feed is unavailable. This also prevents a missing chain from
+    # being silently replaced by fallback weights in confidence_engine.py.
+    if symbol in INDIAN_OPTION_SYMBOLS:
+        oc_status = str((option_chain or {}).get("status", "NO DATA")).upper()
+        if oc_status != "OK":
+            result["recommendation"] = "WAIT"
+            result["overall_confidence"] = min(float(result.get("overall_confidence", 0) or 0), 25.0)
+            result["agreement"] = "DATA RISK"
+            result["data_quality"] = {
+                "status": "BLOCKED",
+                "required": ["5m candles", "live option chain (CE+PE)"],
+                "missing": ["live option chain (CE+PE)"],
+                "message": "WAIT — live NSE/Kotak option-chain confirmation is unavailable.",
+            }
+        else:
+            result["data_quality"] = {
+                "status": "OK",
+                "required": ["5m candles", "live option chain (CE+PE)"],
+                "missing": [],
+                "message": "Required decision inputs available.",
+            }
+
     result["symbol"] = symbol
     result["price"] = spot
     result["time"] = str(timestamp)
