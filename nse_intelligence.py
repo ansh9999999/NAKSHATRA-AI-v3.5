@@ -78,18 +78,27 @@ def _fii_dii():
             df = capital_market.fii_dii_trading_activity()
             rows = _safe_records(df)
             if not rows:
-                return {"status": "NO DATA", "rows": []}
-            normalized = []
+                return {"status": "NO DATA", "rows": [], "source": "NSE/nselib"}
+            def field(row, *tokens):
+                for k, v in row.items():
+                    nk = "".join(ch for ch in str(k).lower() if ch.isalnum())
+                    if all(t in nk for t in tokens):
+                        return v
+                return None
+            normalized=[]
             for r in rows:
-                category = str(r.get("category") or r.get("Category") or "").upper()
-                if "FII" in category or "DII" in category:
-                    buy = r.get("buyValue", r.get("Buy Value"))
-                    sell = r.get("sellValue", r.get("Sell Value"))
-                    net = r.get("netValue", r.get("Net Value"))
-                    normalized.append({"category": "FII/FPI" if "FII" in category else "DII", "date": r.get("date") or r.get("Date"), "buy_cr": _num(buy), "sell_cr": _num(sell), "net_cr": _num(net)})
-            return {"status": "OK", "rows": normalized}
+                cat = field(r,"category") or field(r,"client","type") or field(r,"type")
+                category=str(cat or "").upper()
+                if "FII" not in category and "FPI" not in category and "DII" not in category:
+                    continue
+                buy=field(r,"buy","value") or field(r,"buy")
+                sell=field(r,"sell","value") or field(r,"sell")
+                net=field(r,"net","value") or field(r,"net")
+                dt=field(r,"date")
+                normalized.append({"category":"FII/FPI" if ("FII" in category or "FPI" in category) else "DII","date":dt,"buy_cr":_num(buy),"sell_cr":_num(sell),"net_cr":_num(net)})
+            return {"status":"OK" if normalized else "NO DATA","rows":normalized,"source":"NSE/nselib","raw_columns":list(rows[0].keys())}
         except Exception as exc:
-            return {"status": "ERROR", "rows": [], "error": str(exc)}
+            return {"status":"ERROR","rows":[],"source":"NSE/nselib","error":str(exc)}
     return _cached("fii_dii", load)
 
 
@@ -202,4 +211,8 @@ def _sentiment(fii_dii, vix):
 
 def get_nse_intelligence(symbol="NIFTY50"):
     fii_dii=_fii_dii(); oi=_participant_oi(); vol=_participant_volume(); vix=_india_vix()
-    return {"status":"OK","symbol":symbol,"as_of":fii_dii.get("rows",[{}])[-1].get("date") if fii_dii.get("rows") else oi.get("date"),"fii_dii":fii_dii,"participant_oi":oi,"participant_volume":vol,"india_vix":vix,"sentiment":_sentiment(fii_dii,vix)}
+    sentiment=_sentiment(fii_dii,vix)
+    parts=[fii_dii.get("status"),oi.get("status"),vol.get("status"),vix.get("status")]
+    ok=sum(1 for x in parts if x=="OK")
+    overall="OK" if ok>=3 else "PARTIAL" if ok else "NO DATA"
+    return {"status":overall,"symbol":symbol,"as_of":fii_dii.get("rows",[{}])[-1].get("date") if fii_dii.get("rows") else oi.get("date"),"fii_dii":fii_dii,"participant_oi":oi,"participant_volume":vol,"india_vix":vix,"sentiment":sentiment,"data_quality":{"ok_modules":ok,"total_modules":4,"statuses":parts}}
