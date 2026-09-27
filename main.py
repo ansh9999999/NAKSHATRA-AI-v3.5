@@ -35,7 +35,7 @@ except Exception:
     delta_get_ticker = None
 
 
-CACHE_TTL = 30
+CACHE_TTL = 180
 _analysis_cache = {}
 
 
@@ -175,7 +175,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="NAKSHATRA AI",
-    version="5.5",
+    version="5.10",
     lifespan=lifespan,
 )
 
@@ -214,7 +214,7 @@ def health():
 def api():
     return {
         "project": "NAKSHATRA AI",
-        "version": "5.4",
+        "version": "5.10",
         "status": "RUNNING",
         "supported_symbols": symbols(),
         "provider_routing": {
@@ -232,6 +232,31 @@ def api_live(symbol: str = "BTCUSD", force: bool = False):
     analysis = run_analysis(symbol, force=force)
     ticker = _get_market_quote(symbol)
 
+    # v2.10 data-quality gate for index decisions. A strong directional call
+    # is not allowed when the option chain or positioning sentiment is absent.
+    quality = {"status": "NOT_REQUIRED"}
+    if symbol in ("NIFTY50", "BANKNIFTY") and isinstance(analysis, dict):
+        try:
+            spot = (ticker or {}).get("ltp") or (ticker or {}).get("price") or (ticker or {}).get("close")
+            oc = analyze_option_chain(symbol, spot_price=spot)
+            intel = get_nse_intelligence(symbol)
+            sent = (intel or {}).get("sentiment", {})
+            option_ok = oc.get("status") == "OK" and oc.get("row_count", 0) > 0
+            sentiment_ok = sent.get("status") == "OK"
+            quality = {"status": "OK" if option_ok and sentiment_ok else "DATA RISK", "option_chain": option_ok, "sentiment": sentiment_ok}
+            if not (option_ok and sentiment_ok):
+                analysis["recommendation"] = "WAIT"
+                analysis["signal"] = "WAIT"
+                analysis["data_quality"] = quality
+                analysis["data_quality_reason"] = "Required NSE option-chain/positioning data unavailable; directional signal suppressed."
+                if analysis.get("overall_confidence") is not None:
+                    analysis["overall_confidence"] = min(float(analysis.get("overall_confidence") or 0), 49.0)
+        except Exception as exc:
+            quality = {"status": "DATA RISK", "error": str(exc)}
+            analysis["recommendation"] = "WAIT"
+            analysis["signal"] = "WAIT"
+            analysis["data_quality"] = quality
+
     return _json_safe({
         "status": (
             analysis.get("status", "UNKNOWN")
@@ -242,6 +267,7 @@ def api_live(symbol: str = "BTCUSD", force: bool = False):
         "ticker": ticker,
         "analysis": analysis,
         "server_time": time.time(),
+        "data_quality": quality,
     })
 
 
@@ -251,7 +277,9 @@ def api_options(symbol: str = "NIFTY50"):
     ticker = _get_market_quote(symbol) or {}
     spot = ticker.get("ltp") or ticker.get("price") or ticker.get("close")
     try:
-        return _json_safe(analyze_option_chain(symbol, spot_price=spot))
+        payload = analyze_option_chain(symbol, spot_price=spot)
+        logger.info("OPTION CHAIN %s status=%s source=%s expiry=%s rows=%s", symbol, payload.get("status"), payload.get("source"), payload.get("expiry"), payload.get("row_count",0))
+        return _json_safe(payload)
     except Exception as exc:
         logger.exception("OPTION API ERROR %s", symbol)
         return {"status":"ERROR","signal":"NEUTRAL","confidence":0,"reason":str(exc),"source":"exception","rows":[]}
@@ -261,7 +289,9 @@ def api_options(symbol: str = "NIFTY50"):
 def api_nse_intelligence(symbol: str = "NIFTY50"):
     symbol = canonical_symbol(symbol)
     try:
-        return _json_safe(get_nse_intelligence(symbol))
+        payload = get_nse_intelligence(symbol)
+        logger.info("NSE INTELLIGENCE %s status=%s fii=%s oi=%s vol=%s vix=%s", symbol, payload.get("status"), payload.get("fii_dii",{}).get("status"), payload.get("participant_oi",{}).get("status"), payload.get("participant_volume",{}).get("status"), payload.get("india_vix",{}).get("status"))
+        return _json_safe(payload)
     except Exception as exc:
         logger.exception("NSE INTELLIGENCE ERROR %s", symbol)
         return {"status":"ERROR","symbol":symbol,"error":str(exc)}
@@ -359,35 +389,21 @@ def api_history():
 
 @app.get("/api/scanner")
 def api_scanner():
-    # Indian-market dashboard scanner: keep the side panel aligned with
-    # the active product family instead of showing unrelated crypto pairs.
+    # v2.10: scanner must never fan out into dozens of Kotak historical calls.
+    # It only reports already-cached analyses; uncached symbols remain WAIT.
     results = []
-
+    now = time.time()
     for symbol in ("NIFTY50", "BANKNIFTY", "SENSEX", "NIFTYIT", "GOLD", "SILVER", "CRUDEOIL"):
-        result = run_analysis(symbol)
-        technical = (
-            result.get("technical", {})
-            if isinstance(result, dict)
-            else {}
-        )
-
+        cached = _analysis_cache.get(symbol)
+        result = cached.get("result", {}) if cached and now - cached.get("time", 0) < 900 else {}
+        technical = result.get("technical", {}) if isinstance(result, dict) else {}
         results.append({
             "symbol": symbol,
-            "signal": (
-                technical.get("signal")
-                or result.get("signal")
-                or result.get("recommendation")
-                or "WAIT"
-            ),
-            "strength": (
-                technical.get("confidence")
-                or result.get("overall_confidence")
-                or 0
-            ),
-            "status": result.get("status", "UNKNOWN"),
-            "message": result.get("message", ""),
+            "signal": technical.get("signal") or result.get("signal") or result.get("recommendation") or "WAIT",
+            "strength": technical.get("confidence") or result.get("overall_confidence") or 0,
+            "status": result.get("status", "CACHED DATA UNAVAILABLE"),
+            "message": result.get("message", "Open symbol to run analysis"),
         })
-
     return results
 
 
