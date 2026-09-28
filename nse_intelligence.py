@@ -83,12 +83,16 @@ def _vix():
    from nselib import capital_market
    df=capital_market.india_vix_data(period='1M');r=df.reset_index().to_dict('records')
    if not r:return {'status':'NO DATA'}
-   last=r[-1];prev=r[-2] if len(r)>1 else {}
    def pick(x):
     for k,v in x.items():
-     if str(k).lower() in ('close','vix'):return _num(v)
-   cur=pick(last);pv=pick(prev)
-   return {'status':'OK','value':cur,'change':cur-pv if cur is not None and pv is not None else None,'source':'NSE/nselib'}
+     nk=''.join(c for c in str(k).lower() if c.isalnum())
+     if nk in ('close','vix','closeprice','closingvalue','india vix'.replace(' ','')):
+      z=_num(v)
+      if z is not None and z>0:return z
+   vals=[pick(x) for x in r];vals=[x for x in vals if x is not None]
+   if not vals:return {'status':'NO DATA','source':'NSE/nselib','reason':'VIX close column not recognized'}
+   cur=vals[-1];pv=vals[-2] if len(vals)>1 else None
+   return {'status':'OK','value':cur,'change':cur-pv if pv is not None else None,'source':'NSE/nselib'}
   except Exception as e:return {'status':'ERROR','error':str(e)}
  return _cached('vix211',load)
 def _sentiment(fii,oi,vix):
