@@ -1,218 +1,107 @@
-"""NSE participant/FII-DII/sentiment intelligence with caching.
-Uses NSE-published datasets through nselib. EOD positioning is labeled as such;
-it is not a live order-flow feed.
-"""
 from __future__ import annotations
-from datetime import date, timedelta
-import math, threading, time
-
-_CACHE = {}
-_LOCK = threading.Lock()
-TTL = 900
-
-
-def _safe_records(df):
-    if df is None:
-        return []
-    try:
-        import pandas as pd
-        if isinstance(df, pd.DataFrame):
-            work = df.copy()
-            # Participant reports often use participant names as the index.
-            if not isinstance(work.index, pd.RangeIndex):
-                work = work.reset_index().rename(columns={"index": "participant"})
-            out = work.where(pd.notna(work), None).to_dict(orient="records")
-            return [{str(k): _clean(v) for k, v in r.items()} for r in out]
-    except Exception:
-        pass
-    return []
-
-
-def _clean(v):
-    try:
-        if hasattr(v, "item"):
-            v = v.item()
-    except Exception:
-        pass
-    if isinstance(v, float) and not math.isfinite(v):
-        return None
-    return v
-
-
-def _cached(key, fn):
-    now = time.time()
-    with _LOCK:
-        hit = _CACHE.get(key)
-        if hit and now - hit[0] < TTL:
-            return hit[1]
-    try:
-        value = fn()
-    except Exception as exc:
-        value = {"status": "ERROR", "error": str(exc)}
-    with _LOCK:
-        _CACHE[key] = (now, value)
-    return value
-
-
-def _last_report(fetcher, max_days=7):
-    last_err = None
-    start = date.today()
-    for i in range(max_days):
-        d = start - timedelta(days=i)
-        if d.weekday() >= 5:
-            continue
-        try:
-            df = fetcher(d.strftime("%d-%m-%Y"))
-            rows = _safe_records(df)
-            if rows:
-                return {"date": d.isoformat(), "rows": rows, "columns": list(rows[0].keys())}
-        except Exception as exc:
-            last_err = str(exc)
-    return {"status": "NO DATA", "error": last_err or "No NSE report available"}
-
-
+from datetime import date,timedelta
+import csv,io,math,threading,time,requests
+_CACHE={};_LOCK=threading.Lock();TTL=900
+HEADERS={'User-Agent':'Mozilla/5.0 Chrome/126 Safari/537.36','Accept':'application/json,text/plain,*/*','Referer':'https://www.nseindia.com/'}
+def _num(v,d=None):
+ try:
+  x=float(str(v).replace(',','').replace('₹','').strip());return x if math.isfinite(x) else d
+ except:return d
+def _cached(k,fn):
+ now=time.time()
+ with _LOCK:
+  h=_CACHE.get(k)
+  if h and now-h[0]<TTL:return h[1]
+ try:v=fn()
+ except Exception as e:v={'status':'ERROR','rows':[],'error':str(e)}
+ with _LOCK:_CACHE[k]=(now,v)
+ return v
+def _session():
+ s=requests.Session();s.headers.update(HEADERS)
+ try:s.get('https://www.nseindia.com/',timeout=8)
+ except:pass
+ return s
 def _fii_dii():
-    def load():
-        try:
-            from nselib import capital_market
-            df = capital_market.fii_dii_trading_activity()
-            rows = _safe_records(df)
-            if not rows:
-                return {"status": "NO DATA", "rows": [], "source": "NSE/nselib"}
-            def field(row, *tokens):
-                for k, v in row.items():
-                    nk = "".join(ch for ch in str(k).lower() if ch.isalnum())
-                    if all(t in nk for t in tokens):
-                        return v
-                return None
-            normalized=[]
-            for r in rows:
-                cat = field(r,"category") or field(r,"client","type") or field(r,"type")
-                category=str(cat or "").upper()
-                if "FII" not in category and "FPI" not in category and "DII" not in category:
-                    continue
-                buy=field(r,"buy","value") or field(r,"buy")
-                sell=field(r,"sell","value") or field(r,"sell")
-                net=field(r,"net","value") or field(r,"net")
-                dt=field(r,"date")
-                normalized.append({"category":"FII/FPI" if ("FII" in category or "FPI" in category) else "DII","date":dt,"buy_cr":_num(buy),"sell_cr":_num(sell),"net_cr":_num(net)})
-            return {"status":"OK" if normalized else "NO DATA","rows":normalized,"source":"NSE/nselib","raw_columns":list(rows[0].keys())}
-        except Exception as exc:
-            return {"status":"ERROR","rows":[],"source":"NSE/nselib","error":str(exc)}
-    return _cached("fii_dii", load)
-
-
-def _participant_rows(df):
-    rows = df if isinstance(df, list) else _safe_records(df)
-    out = []
-    for r in rows:
-        def get(*names):
-            for name in names:
-                if name in r and r[name] is not None:
-                    return _num(r[name])
-                # tolerant normalized lookup
-                nk = "".join(ch for ch in name.lower() if ch.isalnum())
-                for k, v in r.items():
-                    kk = "".join(ch for ch in str(k).lower() if ch.isalnum())
-                    if kk == nk:
-                        return _num(v)
-            return None
-        p = r.get("Client Type") or r.get("clientType") or r.get("Client_Type") or r.get("participant") or r.get("Participant")
-        p = str(p or "").strip().upper()
-        if not p:
-            continue
-        # NSE participant-wise OI schema: FII, DII, PRO, CLIENT.
-        out.append({
-            "participant": p,
-            "future_index_long": get("Future Index Long", "Future_Index_Long"),
-            "future_index_short": get("Future Index Short", "Future_Index_Short"),
-            "future_stock_long": get("Future Stock Long", "Future_Stock_Long"),
-            "future_stock_short": get("Future Stock Short", "Future_Stock_Short"),
-            "index_call_long": get("Option Index Call Long", "Option_Index_Call_Long"),
-            "index_call_short": get("Option Index Call Short", "Option_Index_Call_Short"),
-            "index_put_long": get("Option Index Put Long", "Option_Index_Put_Long"),
-            "index_put_short": get("Option Index Put Short", "Option_Index_Put_Short"),
-        })
-    return out
-
-def _participant_oi():
-    def load():
-        try:
-            from nselib import derivatives
-            raw = _last_report(derivatives.participant_wise_open_interest)
-            if raw.get("rows"):
-                raw["rows"] = _participant_rows(raw["rows"])
-            return raw
-        except Exception as exc:
-            return {"status": "ERROR", "error": str(exc), "rows": []}
-    return _cached("participant_oi", load)
-
-
-def _participant_volume():
-    def load():
-        try:
-            from nselib import derivatives
-            raw = _last_report(derivatives.participant_wise_trading_volume)
-            return raw
-        except Exception as exc:
-            return {"status": "ERROR", "error": str(exc), "rows": []}
-    return _cached("participant_volume", load)
-
-
-def _india_vix():
-    def load():
-        try:
-            from nselib import capital_market
-            df = capital_market.india_vix_data(period="1M")
-            rows = _safe_records(df)
-            if not rows:
-                return {"status": "NO DATA"}
-            last = rows[-1]
-            prev = rows[-2] if len(rows) > 1 else {}
-            def first(r, *names):
-                for n in names:
-                    if n in r and r[n] is not None: return r[n]
-                return None
-            cur = _num(first(last,"CLOSE","Close","close","VIX"))
-            pv = _num(first(prev,"CLOSE","Close","close","VIX")) if prev else 0
-            return {"status":"OK","value":cur,"change":(cur-pv if cur and pv else None),"date":first(last,"DATE","Date","date")}
-        except Exception as exc:
-            return {"status":"ERROR","error":str(exc)}
-    return _cached("india_vix", load)
-
-
-def _num(v, default=None):
-    try:
-        x=float(v)
-        return x if math.isfinite(x) else default
-    except Exception:
-        return default
-
-
-def _sentiment(fii_dii, vix):
-    fii = next((x for x in fii_dii.get("rows",[]) if x.get("category")=="FII/FPI"), None)
-    dii = next((x for x in fii_dii.get("rows",[]) if x.get("category")=="DII"), None)
-    score=0.0; reasons=[]
-    if fii and fii.get("net_cr") is not None:
-        score += max(-2.0,min(2.0,fii["net_cr"]/5000.0))
-        reasons.append(f"FII/FPI net ₹{fii['net_cr']:+,.0f} Cr")
-    if dii and dii.get("net_cr") is not None:
-        score += max(-1.5,min(1.5,dii["net_cr"]/5000.0))
-        reasons.append(f"DII net ₹{dii['net_cr']:+,.0f} Cr")
-    if vix.get("value") is not None:
-        # Higher volatility is treated as risk-off pressure, not a direction forecast.
-        score += -0.5 if vix["value"] >= 20 else 0.25 if vix["value"] < 14 else 0
-        reasons.append(f"India VIX {vix['value']:.2f}")
-    if score >= 0.8: bias="BULLISH"
-    elif score <= -0.8: bias="BEARISH"
-    else: bias="NEUTRAL"
-    return {"status":"OK" if reasons else "NO DATA","bias":bias,"score":round(score,2),"reasons":reasons,"note":"Positioning-based sentiment; not a guaranteed next-session direction."}
-
-
-def get_nse_intelligence(symbol="NIFTY50"):
-    fii_dii=_fii_dii(); oi=_participant_oi(); vol=_participant_volume(); vix=_india_vix()
-    sentiment=_sentiment(fii_dii,vix)
-    parts=[fii_dii.get("status"),oi.get("status"),vol.get("status"),vix.get("status")]
-    ok=sum(1 for x in parts if x=="OK")
-    overall="OK" if ok>=3 else "PARTIAL" if ok else "NO DATA"
-    return {"status":overall,"symbol":symbol,"as_of":fii_dii.get("rows",[{}])[-1].get("date") if fii_dii.get("rows") else oi.get("date"),"fii_dii":fii_dii,"participant_oi":oi,"participant_volume":vol,"india_vix":vix,"sentiment":sentiment,"data_quality":{"ok_modules":ok,"total_modules":4,"statuses":parts}}
+ def load():
+  errors=[]
+  try:
+   r=_session().get('https://www.nseindia.com/api/fiidiiTradeReact',timeout=12);r.raise_for_status();raw=r.json();rows=[]
+   for x in raw if isinstance(raw,list) else []:
+    c=str(x.get('category') or x.get('Category') or '').upper();name='FII/FPI' if ('FII' in c or 'FPI' in c) else ('DII' if 'DII' in c else None)
+    if name:rows.append({'category':name,'date':x.get('date') or x.get('Date'),'buy_cr':_num(x.get('buyValue') or x.get('buy_value')),'sell_cr':_num(x.get('sellValue') or x.get('sell_value')),'net_cr':_num(x.get('netValue') or x.get('net_value'))})
+   if rows:return {'status':'OK','rows':rows,'source':'NSE official API','data_type':'EOD/provisional'}
+   errors.append('official API returned no rows')
+  except Exception as e:errors.append('official API: '+str(e))
+  try:
+   from nselib import capital_market
+   df=capital_market.fii_dii_trading_activity();raw=df.reset_index().to_dict('records');rows=[]
+   for x in raw:
+    joined=' '.join(map(str,x.values())).upper();name='FII/FPI' if ('FII' in joined or 'FPI' in joined) else ('DII' if 'DII' in joined else None)
+    if not name:continue
+    def pick(t):
+     for k,v in x.items():
+      if t in ''.join(c for c in str(k).lower() if c.isalnum()):return v
+    rows.append({'category':name,'date':pick('date'),'buy_cr':_num(pick('buy')),'sell_cr':_num(pick('sell')),'net_cr':_num(pick('net'))})
+   if rows:return {'status':'OK','rows':rows,'source':'NSE/nselib','data_type':'EOD/provisional'}
+  except Exception as e:errors.append('nselib: '+str(e))
+  return {'status':'ERROR','rows':[],'source':'NSE','error':' | '.join(errors)}
+ return _cached('fii211',load)
+def _archive(kind):
+ errs=[]
+ for i in range(10):
+  d=date.today()-timedelta(days=i)
+  if d.weekday()>=5:continue
+  url=f"https://nsearchives.nseindia.com/content/nsccl/fao_participant_{kind}_{d.strftime('%d%m%Y')}.csv"
+  try:
+   r=requests.get(url,headers=HEADERS,timeout=12)
+   if r.status_code!=200 or len(r.content)<80:errs.append(f'{d} HTTP {r.status_code}');continue
+   rows=list(csv.DictReader(io.StringIO(r.content.decode('utf-8-sig',errors='replace'))))
+   if rows:return {'status':'OK','date':d.isoformat(),'rows':rows,'source':'NSE official archive','data_type':'EOD'}
+  except Exception as e:errs.append(f'{d} {e}')
+ return {'status':'NO DATA','rows':[],'source':'NSE official archive','error':'; '.join(errs[-4:])}
+def _participant_rows(rows):
+ out=[]
+ for r in rows or []:
+  def val(*need):
+   for k,v in r.items():
+    nk=''.join(c for c in str(k).lower() if c.isalnum())
+    if all(n in nk for n in need):return _num(v)
+  p=None
+  for k,v in r.items():
+   if ''.join(c for c in str(k).lower() if c.isalnum()) in ('clienttype','participant','client'):p=str(v or '').strip().upper();break
+  if p:out.append({'participant':p,'future_index_long':val('future','index','long'),'future_index_short':val('future','index','short'),'future_stock_long':val('future','stock','long'),'future_stock_short':val('future','stock','short'),'index_call_long':val('option','index','call','long'),'index_call_short':val('option','index','call','short'),'index_put_long':val('option','index','put','long'),'index_put_short':val('option','index','put','short')})
+ return out
+def _participant(kind):
+ def load():
+  x=_archive(kind)
+  if x.get('rows'):x['rows']=_participant_rows(x['rows']);x['status']='OK' if x['rows'] else 'NO DATA'
+  return x
+ return _cached('part'+kind+'211',load)
+def _vix():
+ def load():
+  try:
+   from nselib import capital_market
+   df=capital_market.india_vix_data(period='1M');r=df.reset_index().to_dict('records')
+   if not r:return {'status':'NO DATA'}
+   last=r[-1];prev=r[-2] if len(r)>1 else {}
+   def pick(x):
+    for k,v in x.items():
+     if str(k).lower() in ('close','vix'):return _num(v)
+   cur=pick(last);pv=pick(prev)
+   return {'status':'OK','value':cur,'change':cur-pv if cur is not None and pv is not None else None,'source':'NSE/nselib'}
+  except Exception as e:return {'status':'ERROR','error':str(e)}
+ return _cached('vix211',load)
+def _sentiment(fii,oi,vix):
+ score=0.;reasons=[]
+ for name,w in [('FII/FPI',2),('DII',1.5)]:
+  r=next((x for x in fii.get('rows',[]) if x.get('category')==name),None)
+  if r and r.get('net_cr') is not None:score+=max(-w,min(w,r['net_cr']/5000));reasons.append(f"{name} net ₹{r['net_cr']:+,.0f} Cr")
+ fr=next((x for x in oi.get('rows',[]) if x.get('participant')=='FII'),None)
+ if fr and fr.get('future_index_long') is not None and fr.get('future_index_short') is not None:
+  l,s=fr['future_index_long'],fr['future_index_short'];score+=max(-1,min(1,(l-s)/(l+s))) if l+s else 0;reasons.append(f'FII index futures L/S {l:,.0f}/{s:,.0f}')
+ if vix.get('value') is not None:score+=-.5 if vix['value']>=20 else .25 if vix['value']<14 else 0;reasons.append(f"India VIX {vix['value']:.2f}")
+ bias='BULLISH' if score>=.8 else 'BEARISH' if score<=-.8 else 'NEUTRAL'
+ return {'status':'OK' if reasons else 'NO DATA','bias':bias,'score':round(score,2),'reasons':reasons,'note':'Positioning context only; participant reports are EOD, not live order flow.'}
+def get_nse_intelligence(symbol='NIFTY50'):
+ fii=_fii_dii();oi=_participant('oi');vol=_participant('vol');vix=_vix();sent=_sentiment(fii,oi,vix);st=[fii.get('status'),oi.get('status'),vol.get('status'),vix.get('status')];ok=sum(x=='OK' for x in st)
+ return {'status':'OK' if ok>=3 else 'PARTIAL' if ok else 'NO DATA','symbol':symbol,'as_of':oi.get('date') or vol.get('date'),'fii_dii':fii,'participant_oi':oi,'participant_volume':vol,'india_vix':vix,'sentiment':sent,'data_quality':{'ok_modules':ok,'total_modules':4,'statuses':st},'disclaimer':'FII/DII and participant reports are EOD/provisional positioning data, not live buy/sell order flow.'}
