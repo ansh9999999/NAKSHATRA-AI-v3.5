@@ -1,3 +1,4 @@
+from market_catalyst import get_market_catalysts
 """
 NAKSHATRA AI - Fast dashboard API
 
@@ -201,6 +202,27 @@ app.mount(
 )
 
 
+
+def _trend_from_close(df):
+    try:
+        if df is None or df.empty or "close" not in df.columns or len(df)<12:return {"trend":"UNKNOWN"}
+        c=df["close"].astype(float); e9=float(c.ewm(span=9,adjust=False).mean().iloc[-1]); e50=float(c.ewm(span=50,adjust=False).mean().iloc[-1]); px=float(c.iloc[-1])
+        trend="UPTREND" if e9>e50 and px>=e50 else "DOWNTREND" if e9<e50 and px<=e50 else "SIDEWAYS"
+        return {"trend":trend,"ema9":e9,"ema50":e50,"source":"cached market candles"}
+    except Exception:return {"trend":"UNKNOWN"}
+
+def _enrich_timeframes(symbol,analysis):
+    if not isinstance(analysis,dict):return analysis
+    try:
+        data=get_multi_timeframe_history(symbol,limit=220); d={}
+        for tf in ("5m","15m","1h","1d","1w"):
+            if tf in data and data[tf] is not None and not data[tf].empty:d[tf]=_trend_from_close(data[tf])
+        if "1w" not in d and data.get("1d") is not None and len(data["1d"])>=10:
+            x=data["1d"].copy().reset_index(drop=True); x["grp"]=x.index//5; w=x.groupby("grp").agg({"close":"last"}); d["1w"]=_trend_from_close(w); d["1w"]["source"]="derived from 1D candles (5 trading sessions)"
+        analysis["derived_timeframes"]=d
+    except Exception as e:analysis["derived_timeframes_error"]=str(e)
+    return analysis
+
 @app.get("/", response_class=HTMLResponse)
 async def home_page(request: Request):
     return templates.TemplateResponse(
@@ -228,7 +250,7 @@ def health():
 def api():
     return {
         "project": "NAKSHATRA AI",
-        "version": "5.12",
+        "version": "5.13",
         "status": "RUNNING",
         "supported_symbols": symbols(),
         "provider_routing": {
@@ -244,6 +266,7 @@ def api():
 def api_live(symbol: str = "BTCUSD", force: bool = False):
     symbol = canonical_symbol(symbol)
     analysis = run_analysis(symbol, force=force)
+    analysis = _enrich_timeframes(symbol, analysis)
     ticker = _get_market_quote(symbol)
 
     # v2.10 data-quality gate for index decisions. A strong directional call
@@ -307,6 +330,11 @@ def api_options(symbol: str = "NIFTY50"):
     try:
         payload = analyze_option_chain(symbol, spot_price=spot)
         ingest_position_shift(symbol, spot, payload)
+        rows=payload.get("rows") or []
+        if rows:
+            co=sum(float(r.get("call_oi") or r.get("ce_oi") or 0) for r in rows); po=sum(float(r.get("put_oi") or r.get("pe_oi") or 0) for r in rows)
+            cv=sum(float(r.get("call_volume") or r.get("ce_volume") or 0) for r in rows); pv=sum(float(r.get("put_volume") or r.get("pe_volume") or 0) for r in rows)
+            payload.update(pcr_oi_calc=round(po/co,4) if co else None,pcr_volume_calc=round(pv/cv,4) if cv else None,chain_total_oi=co+po,chain_total_volume=cv+pv,call_volume_total=cv,put_volume_total=pv)
         logger.info("OPTION CHAIN %s status=%s source=%s expiry=%s rows=%s", symbol, payload.get("status"), payload.get("source"), payload.get("expiry"), payload.get("row_count",0))
         return _json_safe(payload)
     except Exception as exc:
@@ -330,6 +358,16 @@ def api_nse_intelligence(symbol: str = "NIFTY50"):
     except Exception as exc:
         logger.exception("NSE INTELLIGENCE ERROR %s", symbol)
         return {"status":"ERROR","symbol":symbol,"error":str(exc)}
+
+
+@app.get("/api/catalysts")
+def api_catalysts(symbol: str = "NIFTY50"):
+    symbol=canonical_symbol(symbol); expiry=None
+    try:
+        q=_get_market_quote(symbol) or {}
+        if symbol in ("NIFTY50","BANKNIFTY"):expiry=analyze_option_chain(symbol,spot_price=q.get("ltp") or q.get("price") or q.get("close")).get("expiry")
+    except Exception:pass
+    return _json_safe(get_market_catalysts(symbol,expiry=expiry))
 
 
 @app.get("/api/debug-data")
