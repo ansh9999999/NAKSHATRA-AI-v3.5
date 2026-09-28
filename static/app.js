@@ -5,7 +5,7 @@ async function loadCatalysts(){try{const r=await fetch(`/api/catalysts?symbol=${
 function renderPositionShift(x){x=x||{};set('shiftStatus',`● ${x.status||'NO DATA'}`);set('shiftBias',x.bias||'WAIT');paint('shiftBias',x.bias);set('shiftPhase',x.phase||'—');set('shiftStrength',`${x.strength||0}/100`);set('shiftAction',x.action||'WAIT');paint('shiftAction',x.bias);for(const k of ['1m','3m','5m','15m']){const v=x.windows?.[k]?.score;set('shift'+k.replace('m','m'),v==null?'—':`${v>0?'+':''}${v}`)}set('shiftNote',x.note||x.message||'Collecting live snapshots…')}
 async function loadPositionShift(){try{const r=await fetch(`/api/position-shift?symbol=${encodeURIComponent(symbol)}&_=${Date.now()}`,{cache:'no-store'});renderPositionShift(await r.json())}catch(e){set('shiftStatus','● ERROR')}}
 function renderOptionTradePlan(o){const p=o||{};if(p.status==='READY'){set('optionBuy',p.contract?`${p.action} • ${p.contract}`:(p.action||'OPTION BUY'));set('optionLtp',p.ltp!=null?fmt(p.ltp):'—');set('optionExpiry',p.expiry||'—');paint('optionBuy',p.option_type==='CALL'?'BUY':'SELL')}else{set('optionBuy','WAIT • NO OPTION BUY');set('optionLtp','—');set('optionExpiry','—');paint('optionBuy','WAIT')}}
-const APP_VERSION='6.7.0';
+const APP_VERSION='6.8.0';
 let symbol='NIFTY50',busy=false;
 const $=id=>document.getElementById(id);
 const esc=v=>String(v??'—').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'",'&#039;');
@@ -17,7 +17,17 @@ function biasClass(v){const s=String(v||'').toUpperCase();return s.includes('BUL
 function paint(id,v){const el=$(id);if(el)el.className=(el.className||'').replace(/\b(bull|bear|wait)\b/g,'').trim()+' '+biasClass(v)}
 function normalizeRows(o){
  const raw=Array.isArray(o?.rows)?o.rows:(Array.isArray(o?.atm_chain)?o.atm_chain:[]);
- return raw.map(r=>({strike:num(r.strike??r.strike_price),ceLtp:num(r.call_ltp??r.ce_ltp??r.ce?.ltp),ceOi:num(r.call_oi??r.ce_oi??r.ce?.oi),peLtp:num(r.put_ltp??r.pe_ltp??r.pe?.ltp),peOi:num(r.put_oi??r.pe_oi??r.pe?.oi),ceDoi:num(r.call_oi_change??r.ce_oi_change??r.ce?.oi_change),peDoi:num(r.put_oi_change??r.pe_oi_change??r.pe?.oi_change),ceVol:num(r.call_volume??r.ce_volume??r.ce?.volume),peVol:num(r.put_volume??r.pe_volume??r.pe?.volume),atm:Boolean(r.atm)})).filter(r=>r.strike!==null).sort((a,b)=>a.strike-b.strike);
+ const m=new Map();
+ raw.forEach(r=>{
+   const strike=num(r.strike??r.strike_price); if(strike===null)return;
+   const x=m.get(strike)||{strike,ceLtp:null,ceOi:null,peLtp:null,peOi:null,ceDoi:null,peDoi:null,ceVol:null,peVol:null,atm:Boolean(r.atm)};
+   const typ=String(r.type||r.option_type||'').toUpperCase();
+   if(typ==='CALL'||typ==='CE'){x.ceLtp=num(r.ltp??r.call_ltp??r.ce_ltp);x.ceOi=num(r.oi??r.call_oi??r.ce_oi);x.ceDoi=num(r.oi_change??r.call_oi_change??r.ce_oi_change);x.ceVol=num(r.volume??r.call_volume??r.ce_volume)}
+   else if(typ==='PUT'||typ==='PE'){x.peLtp=num(r.ltp??r.put_ltp??r.pe_ltp);x.peOi=num(r.oi??r.put_oi??r.pe_oi);x.peDoi=num(r.oi_change??r.put_oi_change??r.pe_oi_change);x.peVol=num(r.volume??r.put_volume??r.pe_volume)}
+   else {x.ceLtp=num(r.call_ltp??r.ce_ltp??r.ce?.ltp);x.ceOi=num(r.call_oi??r.ce_oi??r.ce?.oi);x.peLtp=num(r.put_ltp??r.pe_ltp??r.pe?.ltp);x.peOi=num(r.put_oi??r.pe_oi??r.pe?.oi);x.ceDoi=num(r.call_oi_change??r.ce_oi_change??r.ce?.oi_change);x.peDoi=num(r.put_oi_change??r.pe_oi_change??r.pe?.oi_change);x.ceVol=num(r.call_volume??r.ce_volume??r.ce?.volume);x.peVol=num(r.put_volume??r.pe_volume??r.pe?.volume)}
+   m.set(strike,x);
+ });
+ return [...m.values()].sort((a,b)=>a.strike-b.strike);
 }
 function calcOption(o,spot){
  const rows=normalizeRows(o); if(!rows.length)return {rows:[],status:String(o?.status||'NO DATA').toUpperCase(),view:'SIDEWAYS',topCalls:[],topPuts:[]};
@@ -89,13 +99,16 @@ function renderParticipant(d){
  const score=num(sent.score); let impact='MIXED / DATA-DEPENDENT';
  if(score!=null) impact=score>=1?'Potential risk-on support':score<=-1?'Potential risk-off pressure':'Mixed positioning — watch first-hour confirmation';
  set('nextSessionImpact',impact); set('participantReason',(sent.reasons||[]).join(' • ')||sent.note||'NSE participant data unavailable');
- const hasParticipant=((d.participant_oi&&d.participant_oi.rows)||[]).length>0;set('participantStatus',d.status==='OK'?'● EOD DATA':hasParticipant?'● PARTIAL EOD':'● NO DATA');
+ const hasParticipant=((d.participant_oi&&d.participant_oi.rows)||[]).length>0;const hasAny=(fd.length>0)||(vx.value!=null)||hasParticipant;set('participantStatus',d.status==='OK'?'● EOD DATA':hasAny?'● PARTIAL EOD':'● NO DATA');
  const oi=(d.participant_oi&&d.participant_oi.rows)||[];
  const rows=oi.map(r=>{const long=num(r.future_index_long),short=num(r.future_index_short);return {p:String(r.participant||'—').toUpperCase(),long,short,net:(long!=null&&short!=null?long-short:null),ceNet:(num(r.index_call_long)||0)-(num(r.index_call_short)||0),peNet:(num(r.index_put_long)||0)-(num(r.index_put_short)||0)}}).filter(x=>x.p&&x.p!=='—');
  $('participantRows').innerHTML=rows.length?rows.slice(0,8).map(x=>`<tr><td>${esc(x.p)}</td><td>${fmt(x.long,0)}</td><td>${fmt(x.short,0)}</td><td class="${x.net>=0?'bull':'bear'}">${x.net==null?'—':fmt(x.net,0)}</td><td class="${x.ceNet>=0?'bull':'bear'}">${fmt(x.ceNet,0)}</td><td class="${x.peNet>=0?'bull':'bear'}">${fmt(x.peNet,0)}</td></tr>`).join(''):'<tr><td colspan="6">NSE participant-wise OI unavailable or schema changed.</td></tr>';
 }
 async function loadNSEIntelligence(){try{const r=await fetch(`/api/nse-intelligence?symbol=${encodeURIComponent(symbol)}&_=${Date.now()}`,{cache:'no-store'});const d=await r.json();renderParticipant(d)}catch(e){set('participantStatus','● ERROR');set('nextSessionImpact','NSE participant feed unavailable')}}
 async function loadOptions(){try{const r=await fetch(`/api/options?symbol=${encodeURIComponent(symbol)}&_=${Date.now()}`,{cache:'no-store'});const d=await r.json();if(d)renderOption(d, num($('price')?.textContent?.replace(/,/g,''))||0)}catch(e){set('optionStatus','● ERROR')}}
+
+function renderFutures(d){const f=d?.futures||{},c=d?.combined||{};set('futureStatus',`● ${f.status||'NO DATA'}`);set('futureContract',f.contract||'—');set('futurePrice',fmt(f.price));set('futureOi',fmt(f.oi,0));set('futureVolume',fmt(f.volume,0));if(['NIFTY50','BANKNIFTY','NIFTYIT'].includes(symbol)){set('dayVolume',fmt(f.volume,0));set('openInterest',fmt(f.oi,0));}set('futureBasis',f.basis==null?'—':`${f.basis>=0?'+':''}${fmt(f.basis,2)}`);set('futureDoi',f.snapshot_oi_change==null?'WARMING':`${f.snapshot_oi_change>=0?'+':''}${fmt(f.snapshot_oi_change,0)}`);set('futureBuild',f.buildup||'NO DATA');paint('futureBuild',f.buildup);set('foCompare',c.view||'WAIT');set('foAction',c.action||'WAIT');paint('foCompare',c.view);paint('foAction',c.action);set('futureNote',f.note||f.reason||'Live futures data unavailable.')}
+async function loadFutures(){try{const r=await fetch(`/api/futures?symbol=${encodeURIComponent(symbol)}&_=${Date.now()}`,{cache:'no-store'});renderFutures(await r.json())}catch(e){set('futureStatus','● ERROR')}}
 
 function render(a){
  const x=a.analysis||{},t=a.ticker||{},o=x.option_chain||{},it=x.intraday_trend||{},ast=x.astrology||{},numx=x.numerology||{},sent=x.sentiment||{},ag=x.agreement_detail||{};
@@ -106,7 +119,7 @@ function render(a){
  set('agreementMini',`Agreement ${ag.final||x.agreement||'—'}`);set('agreementMini2',ag.final||x.agreement||'—');
  set('tf5',tr['5m']?.trend||by['5m']?.trend||dt['5m']?.trend||'UNKNOWN');set('tf15',tr['15m']?.trend||by['15m']?.trend||dt['15m']?.trend||'UNKNOWN');set('tf1h',tr['1h']?.trend||by['1h']?.trend||dt['1h']?.trend||'UNKNOWN');set('tf1d',tr['1d']?.trend||by['1d']?.trend||dt['1d']?.trend||'UNKNOWN');set('tf1w',tr['1w']?.trend||by['1w']?.trend||dt['1w']?.trend||'UNKNOWN');
  set('intra5',by['5m']?.trend||tr['5m']?.trend||dt['5m']?.trend||'UNKNOWN');set('intra15',by['15m']?.trend||tr['15m']?.trend||dt['15m']?.trend||'UNKNOWN');set('intra1h',by['1h']?.trend||tr['1h']?.trend||dt['1h']?.trend||'UNKNOWN');
- set('activityRegime','MARKET DATA');set('relativeVolume','—');set('volumeRegime',t.volume?'LIVE':'—');
+ set('activityRegime','MARKET DATA');
  renderTradePlan(x,price);renderOptionTradePlan(a.option_trade||x.option_trade);renderPositionShift(a.position_shift);
  $('reasons').innerHTML=(x.reasons||[]).slice(0,6).map(r=>`<div>• ${esc(r)}</div>`).join('')||'<div>No high-quality reasons returned.</div>'; const tech=x.technical||{};set('moduleTechnical',tech.signal||'—');paint('moduleTechnical',tech.signal);set('moduleOption',o.signal||'—');paint('moduleOption',o.signal);set('moduleAstrology',ast.bias||'—');set('moduleAstrology2',ast.bias||'—');set('moduleNumerology',numx.bias||'—');set('moduleNumerology2',numx.bias||'—');set('trend',tr.overall_trend||it.overall||'—');paint('trend',tr.overall_trend||it.overall);['tf5','tf15','tf1h','tf1d','tf1w','intra5','intra15','intra1h'].forEach(id=>paint(id,$(id)?.textContent));
  $('metrics').innerHTML=[['EMA9',tr['5m']?.ema9],['EMA50',tr['5m']?.ema50],['EMA200',tr['5m']?.ema200],['RSI',tech.momentum?.rsi??x.rsi],['MACD',tech.momentum?.macd??x.macd],['ATR',x.atr??'—'],['Technical Score',tech.confidence??tech.score],['MTF Score',tr.total_score]].map(q=>`<div><small>${q[0]}</small><b>${fmt(q[1],4)}</b></div>`).join('');
@@ -126,7 +139,7 @@ async function load(){
   if(!r.ok) throw new Error(`HTTP ${r.status}`);
   const d=await r.json();
   if(d && (d.ticker || d.analysis)){
-    render(d); loadOptions(); loadNSEIntelligence(); loadCatalysts();
+    render(d); loadOptions(); loadFutures(); loadNSEIntelligence(); loadCatalysts();
     if(d.status!=='OK' && d.analysis?.status!=='OK'){
       set('status','● DATA RISK');
       set('dataState','● DATA RISK');
