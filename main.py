@@ -28,6 +28,7 @@ from market_registry import canonical_symbol, symbols
 from kotak_neo import get_quote
 from analysis.option_chain_engine import analyze_option_chain
 from nse_intelligence import get_nse_intelligence
+from position_shift_engine import ingest as ingest_position_shift, analyze as analyze_position_shift
 
 try:
     from delta import get_ticker as delta_get_ticker
@@ -164,6 +165,19 @@ def _get_market_quote(symbol):
     return None
 
 
+
+def _build_option_buy_plan(symbol, analysis, oc):
+    if symbol not in ("NIFTY50","BANKNIFTY") or not isinstance(analysis,dict): return {"status":"NOT_REQUIRED"}
+    side=str(analysis.get("recommendation") or analysis.get("signal") or "WAIT").upper()
+    if side not in ("BUY","SELL"): return {"status":"WAIT","action":"NO OPTION BUY","reason":"Main AI signal is WAIT or data quality is insufficient."}
+    if not isinstance(oc,dict) or oc.get("status")!="OK" or not oc.get("rows"): return {"status":"WAIT","action":"NO OPTION BUY","reason":"Live option chain unavailable."}
+    typ="CALL" if side=="BUY" else "PUT"; suffix="CE" if typ=="CALL" else "PE"; atm=oc.get("atm_strike")
+    rows=[r for r in oc.get("rows",[]) if r.get("type")==typ and r.get("strike") is not None]
+    if not rows:return {"status":"WAIT","action":"NO OPTION BUY","reason":f"No {typ} contracts available."}
+    row=min(rows,key=lambda r:abs(float(r.get("strike") or 0)-float(atm))) if atm is not None else max(rows,key=lambda r:float(r.get("volume") or 0))
+    strike=row.get("strike"); contract=f"{symbol} {strike:g} {suffix}" if isinstance(strike,(int,float)) else f"{symbol} {strike} {suffix}"
+    return {"status":"READY","action":f"BUY {suffix}","contract":contract,"option_type":typ,"strike":strike,"expiry":oc.get("expiry"),"ltp":row.get("ltp"),"oi":row.get("oi"),"volume":row.get("volume"),"iv":row.get("iv"),"basis":"ATM option after confirmed underlying direction and live option-chain validation."}
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Starting NAKSHATRA AI provider-aware API")
@@ -175,7 +189,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="NAKSHATRA AI",
-    version="5.10",
+    version="5.12",
     lifespan=lifespan,
 )
 
@@ -214,7 +228,7 @@ def health():
 def api():
     return {
         "project": "NAKSHATRA AI",
-        "version": "5.10",
+        "version": "5.12",
         "status": "RUNNING",
         "supported_symbols": symbols(),
         "provider_routing": {
@@ -235,10 +249,12 @@ def api_live(symbol: str = "BTCUSD", force: bool = False):
     # v2.10 data-quality gate for index decisions. A strong directional call
     # is not allowed when the option chain or positioning sentiment is absent.
     quality = {"status": "NOT_REQUIRED"}
+    oc = None
     if symbol in ("NIFTY50", "BANKNIFTY") and isinstance(analysis, dict):
         try:
             spot = (ticker or {}).get("ltp") or (ticker or {}).get("price") or (ticker or {}).get("close")
             oc = analyze_option_chain(symbol, spot_price=spot)
+            ingest_position_shift(symbol, spot, oc)
             intel = get_nse_intelligence(symbol)
             sent = (intel or {}).get("sentiment", {})
             option_ok = oc.get("status") == "OK" and oc.get("row_count", 0) > 0
@@ -257,6 +273,16 @@ def api_live(symbol: str = "BTCUSD", force: bool = False):
             analysis["signal"] = "WAIT"
             analysis["data_quality"] = quality
 
+    shift = analyze_position_shift(symbol) if symbol in ("NIFTY50","BANKNIFTY") else {"status":"NOT_REQUIRED"}
+    option_trade = _build_option_buy_plan(symbol, analysis, oc)
+    if option_trade.get("status") == "READY" and shift.get("status") == "OK":
+        needed = "BULLISH" if option_trade.get("option_type") == "CALL" else "BEARISH"
+        if shift.get("bias") not in (needed, "NEUTRAL"):
+            option_trade = {"status":"WAIT","action":"NO OPTION BUY","reason":"Live position shift conflicts with the directional signal.","position_shift":shift}
+        else:
+            option_trade["position_shift"] = shift
+    if isinstance(analysis, dict): analysis["option_trade"] = option_trade
+
     return _json_safe({
         "status": (
             analysis.get("status", "UNKNOWN")
@@ -268,6 +294,8 @@ def api_live(symbol: str = "BTCUSD", force: bool = False):
         "analysis": analysis,
         "server_time": time.time(),
         "data_quality": quality,
+        "option_trade": option_trade,
+        "position_shift": shift,
     })
 
 
@@ -278,11 +306,18 @@ def api_options(symbol: str = "NIFTY50"):
     spot = ticker.get("ltp") or ticker.get("price") or ticker.get("close")
     try:
         payload = analyze_option_chain(symbol, spot_price=spot)
+        ingest_position_shift(symbol, spot, payload)
         logger.info("OPTION CHAIN %s status=%s source=%s expiry=%s rows=%s", symbol, payload.get("status"), payload.get("source"), payload.get("expiry"), payload.get("row_count",0))
         return _json_safe(payload)
     except Exception as exc:
         logger.exception("OPTION API ERROR %s", symbol)
         return {"status":"ERROR","signal":"NEUTRAL","confidence":0,"reason":str(exc),"source":"exception","rows":[]}
+
+
+@app.get("/api/position-shift")
+def api_position_shift(symbol: str = "NIFTY50"):
+    symbol = canonical_symbol(symbol)
+    return _json_safe(analyze_position_shift(symbol))
 
 
 @app.get("/api/nse-intelligence")
