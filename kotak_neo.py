@@ -688,44 +688,97 @@ def get_quote(symbol):
 
 
 def get_index_future_quote(symbol):
-    """Best-effort live near-month index future quote from Kotak Neo.
-    Returns NO DATA rather than substituting spot or fabricating OI/volume.
+    """Live near-month index future quote from Kotak Neo with strict underlying matching.
+
+    Safety rule: never substitute another index future.  If an exact underlying
+    contract cannot be identified, return None so the dashboard shows NO DATA.
     """
     canonical = canonical_symbol(symbol)
     base = {"NIFTY50":"NIFTY", "BANKNIFTY":"BANKNIFTY", "NIFTYIT":"NIFTYIT"}.get(canonical)
     if not base:
         return None
+
     client = _client()
     search = getattr(client, "search_scrip", None)
     if not callable(search):
         return None
-    records=[]
+
+    records = []
     for kwargs in (
-        {"exchange_segment":"nse_fo","symbol":base,"expiry":"","option_type":"FUT","strike_price":""},
-        {"exchange_segment":"nse_fo","symbol":base},
+        {"exchange_segment":"nse_fo", "symbol":base, "expiry":"", "option_type":"FUT", "strike_price":""},
+        {"exchange_segment":"nse_fo", "symbol":base},
     ):
         try:
             records = _extract_search_records(search(**kwargs))
-            if records: break
+            if records:
+                break
         except TypeError:
             continue
         except Exception as exc:
             logger.warning("KOTAK futures search failed %s: %s", canonical, exc)
-    fut=[]
-    for r in records:
-        it=_text(r.get("instrument_type")).upper(); ts=_text(r.get("trading_symbol")).upper()
-        if "FUT" in it or ts.endswith("FUT") or "FUT" in ts:
-            fut.append(r)
-    if not fut:
+
+    # Known NSE index derivative roots.  Determine the root from the trading
+    # symbol, rather than accepting the first FUTIDX returned by a fuzzy search.
+    # Longest-first prevents NIFTY from matching NIFTYIT/NIFTYNXT50 etc.
+    known_roots = sorted({
+        "BANKNIFTY", "MIDCPNIFTY", "FINNIFTY", "NIFTYNXT50", "NIFTYIT",
+        "NIFTYMID50", "NFTYMCAP50", "NIFTYFPI", "NIFTY"
+    }, key=len, reverse=True)
+
+    def contract_root(record):
+        ts = re.sub(r"[^A-Z0-9]", "", _text(record.get("trading_symbol")).upper())
+        for root in known_roots:
+            if ts.startswith(root):
+                return root
         return None
-    fut.sort(key=lambda r:_expiry_key(r.get("expiry")))
-    record=fut[0]
-    market={"neo_exchange_segment":"nse_fo"}
+
+    fut = []
+    rejected = []
+    for r in records:
+        it = _text(r.get("instrument_type")).upper()
+        ts = _text(r.get("trading_symbol")).upper()
+        is_future = ("FUT" in it or ts.endswith("FUT") or "FUT" in ts)
+        if not is_future:
+            continue
+        root = contract_root(r)
+        if root == base:
+            fut.append(r)
+        else:
+            rejected.append(ts)
+
+    if not fut:
+        if rejected:
+            logger.warning(
+                "KOTAK FUTURES STRICT MATCH FAILED %s expected=%s rejected=%s",
+                canonical, base, rejected[:5]
+            )
+        return None
+
+    now_utc = datetime.now(timezone.utc)
+    live = [r for r in fut if _expiry_key(r.get("expiry")) >= now_utc.replace(hour=0, minute=0, second=0, microsecond=0)]
+    candidates = live or fut
+    candidates.sort(key=lambda r: _expiry_key(r.get("expiry")))
+    record = candidates[0]
+
+    # Final guard before quote request.
+    if contract_root(record) != base:
+        logger.error("KOTAK FUTURES WRONG CONTRACT BLOCKED %s contract=%s", canonical, record.get("trading_symbol"))
+        return None
+
+    market = {"neo_exchange_segment":"nse_fo"}
     for token in _quote_candidates(record, market):
         try:
-            q=_extract_quote(client.quotes(instrument_tokens=[token], quote_type="all"))
+            q = _extract_quote(client.quotes(instrument_tokens=[token], quote_type="all"))
             if q:
-                q.update(symbol=canonical, source="kotak_neo", contract=record.get("trading_symbol"), expiry=record.get("expiry"), instrument_type=record.get("instrument_type"))
+                q.update(
+                    symbol=canonical,
+                    underlying=base,
+                    source="kotak_neo",
+                    contract=record.get("trading_symbol"),
+                    expiry=record.get("expiry"),
+                    instrument_type=record.get("instrument_type"),
+                )
+                logger.info("KOTAK FUTURES OK %s underlying=%s contract=%s", canonical, base, record.get("trading_symbol"))
                 return q
         except Exception as exc:
             logger.warning("KOTAK futures quote failed %s: %s", canonical, exc)
