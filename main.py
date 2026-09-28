@@ -27,6 +27,7 @@ from analysis.signal import generate_signal
 from scanner import market_scan
 from market_registry import canonical_symbol, symbols
 from kotak_neo import get_quote
+from futures_intelligence import get_futures_intelligence, combine_futures_options
 from analysis.option_chain_engine import analyze_option_chain
 from nse_intelligence import get_nse_intelligence
 from position_shift_engine import ingest as ingest_position_shift, analyze as analyze_position_shift
@@ -190,7 +191,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="NAKSHATRA AI",
-    version="5.12",
+    version="5.15",
     lifespan=lifespan,
 )
 
@@ -332,14 +333,27 @@ def api_options(symbol: str = "NIFTY50"):
         ingest_position_shift(symbol, spot, payload)
         rows=payload.get("rows") or []
         if rows:
-            co=sum(float(r.get("call_oi") or r.get("ce_oi") or 0) for r in rows); po=sum(float(r.get("put_oi") or r.get("pe_oi") or 0) for r in rows)
-            cv=sum(float(r.get("call_volume") or r.get("ce_volume") or 0) for r in rows); pv=sum(float(r.get("put_volume") or r.get("pe_volume") or 0) for r in rows)
-            payload.update(pcr_oi_calc=round(po/co,4) if co else None,pcr_volume_calc=round(pv/cv,4) if cv else None,chain_total_oi=co+po,chain_total_volume=cv+pv,call_volume_total=cv,put_volume_total=pv)
+            # Engine rows are one contract per row (type=CALL/PUT). Do not expect paired CE/PE fields.
+            calls=[r for r in rows if str(r.get("type") or "").upper()=="CALL"]
+            puts=[r for r in rows if str(r.get("type") or "").upper()=="PUT"]
+            co=sum(float(r.get("oi") or 0) for r in calls); po=sum(float(r.get("oi") or 0) for r in puts)
+            cv=sum(float(r.get("volume") or 0) for r in calls); pv=sum(float(r.get("volume") or 0) for r in puts)
+            payload.update(pcr_oi_calc=round(po/co,4) if co else payload.get("pcr"),pcr_volume_calc=round(pv/cv,4) if cv else payload.get("volume_pcr"),chain_total_oi=co+po,chain_total_volume=cv+pv,call_volume_total=cv,put_volume_total=pv)
         logger.info("OPTION CHAIN %s status=%s source=%s expiry=%s rows=%s", symbol, payload.get("status"), payload.get("source"), payload.get("expiry"), payload.get("row_count",0))
         return _json_safe(payload)
     except Exception as exc:
         logger.exception("OPTION API ERROR %s", symbol)
         return {"status":"ERROR","signal":"NEUTRAL","confidence":0,"reason":str(exc),"source":"exception","rows":[]}
+
+
+@app.get("/api/futures")
+def api_futures(symbol: str = "NIFTY50"):
+    symbol=canonical_symbol(symbol)
+    ticker=_get_market_quote(symbol) or {}
+    spot=ticker.get("ltp") or ticker.get("price") or ticker.get("close")
+    fut=get_futures_intelligence(symbol, spot)
+    oc=analyze_option_chain(symbol, spot_price=spot) if symbol in ("NIFTY50","BANKNIFTY") else {"status":"NOT_REQUIRED"}
+    return _json_safe({"futures":fut,"combined":combine_futures_options(fut,oc)})
 
 
 @app.get("/api/position-shift")
