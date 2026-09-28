@@ -11,6 +11,7 @@ Public API kept compatible:
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
+import threading
 
 import pandas as pd
 import requests
@@ -36,12 +37,65 @@ DEFAULT_LIMIT = 200
 _CACHE = {}
 _CACHE_TTL = 45
 
+# V2.14: Kotak history is expensive/rate-limited. Cache by symbol+timeframe
+# (NOT by requested limit), so dashboard limit=200 and analysis limit=220
+# share the same fetch instead of making duplicate API calls.
+_TIMEFRAME_TTL = {
+    "5m": 60,
+    "15m": 180,
+    "1h": 600,
+    "1d": 3600,
+}
+_KOTAK_FETCH_LIMIT = 240
+_STALE_FALLBACK_SECONDS = 1800
+
+# One in-flight request per symbol/timeframe. Concurrent dashboard/scanner
+# requests wait for the first request and then reuse its cache.
+_LOCKS = {}
+_LOCKS_GUARD = threading.Lock()
+
+# Reject clearly old intraday history. This still tolerates weekends/holidays.
+_MAX_LAST_CANDLE_AGE = {
+    "5m": 5 * 86400,
+    "15m": 5 * 86400,
+    "1h": 7 * 86400,
+    "1d": 14 * 86400,
+}
+
 # Kotak historical-data endpoint does not support MCX in this integration.
 # MCX instruments still have live quotes/options, but history must not be
 # requested repeatedly because Kotak returns HTTP 400 for that exchange.
 MCX_SYMBOLS = {"GOLD", "SILVER", "CRUDEOIL"}
 
-_TIMEFRAME_TTL = {"5m": 20, "15m": 45, "1h": 90, "1d": 300}
+
+def _kotak_lock(symbol, resolution):
+    key = (symbol, resolution)
+    with _LOCKS_GUARD:
+        if key not in _LOCKS:
+            _LOCKS[key] = threading.Lock()
+        return _LOCKS[key]
+
+
+def _last_candle_age_seconds(df):
+    try:
+        if df is None or df.empty:
+            return None
+        idx = df.index[-1]
+        ts = pd.Timestamp(idx)
+        if ts.tzinfo is None:
+            ts = ts.tz_localize("UTC")
+        else:
+            ts = ts.tz_convert("UTC")
+        return max(0.0, time.time() - ts.timestamp())
+    except Exception:
+        return None
+
+
+def _is_reasonably_fresh(df, resolution):
+    age = _last_candle_age_seconds(df)
+    if age is None:
+        return False
+    return age <= _MAX_LAST_CANDLE_AGE.get(resolution, 14 * 86400)
 
 
 def _empty():
@@ -172,37 +226,75 @@ def get_history(symbol="BTCUSD", resolution="5m", limit=200):
         return _fetch_delta_history(canonical, resolution, limit)
 
     if provider == "kotak_neo":
-        # MCX historical candles are rejected by Kotak's historical endpoint
-        # in the current Neo integration. Do not hammer the endpoint.
         if canonical in MCX_SYMBOLS:
-            logger.info("HISTORY SKIP provider=kotak_neo symbol=%s tf=%s reason=MCX_HISTORY_UNSUPPORTED", canonical, resolution)
+            logger.info(
+                "HISTORY SKIP provider=kotak_neo symbol=%s tf=%s reason=MCX_HISTORY_UNSUPPORTED",
+                canonical, resolution,
+            )
             return _empty()
 
-        key = ("kotak", canonical, resolution, int(limit))
+        tf = str(resolution).lower()
+        # IMPORTANT: no limit in cache key. A 200-row and 220-row caller now
+        # share the same 240-row upstream fetch.
+        key = ("kotak", canonical, tf)
         now = time.time()
-        ttl = _TIMEFRAME_TTL.get(str(resolution).lower(), _CACHE_TTL)
+        ttl = _TIMEFRAME_TTL.get(tf, _CACHE_TTL)
+
         cached = _CACHE.get(key)
         if cached and now - cached[0] < ttl:
-            return cached[1].copy()
+            df = cached[1]
+            if _is_reasonably_fresh(df, tf):
+                logger.info(
+                    "HISTORY CACHE HIT provider=kotak_neo symbol=%s tf=%s age=%.1fs rows=%s",
+                    canonical, tf, now - cached[0], min(len(df), int(limit)),
+                )
+                return df.tail(int(limit)).copy()
 
-        df = kotak_get_history(canonical, resolution, limit)
+        lock = _kotak_lock(canonical, tf)
+        with lock:
+            # Another request may have populated the cache while we waited.
+            now = time.time()
+            cached = _CACHE.get(key)
+            if cached and now - cached[0] < ttl and _is_reasonably_fresh(cached[1], tf):
+                logger.info(
+                    "HISTORY CACHE HIT AFTER WAIT provider=kotak_neo symbol=%s tf=%s rows=%s",
+                    canonical, tf, min(len(cached[1]), int(limit)),
+                )
+                return cached[1].tail(int(limit)).copy()
 
-        if df is not None and not df.empty:
-            _CACHE[key] = (time.time(), df.copy())
-            logger.info(
-                "HISTORY OK provider=kotak_neo symbol=%s tf=%s rows=%s",
-                canonical,
-                resolution,
-                len(df),
+            # Fetch one common superset so all consumers reuse it.
+            fetch_limit = max(_KOTAK_FETCH_LIMIT, int(limit))
+            df = kotak_get_history(canonical, tf, fetch_limit)
+
+            if df is not None and not df.empty and _is_reasonably_fresh(df, tf):
+                _CACHE[key] = (time.time(), df.copy())
+                logger.info(
+                    "HISTORY OK provider=kotak_neo symbol=%s tf=%s rows=%s cached_rows=%s",
+                    canonical, tf, min(len(df), int(limit)), len(df),
+                )
+                return df.tail(int(limit)).copy()
+
+            if df is not None and not df.empty:
+                logger.warning(
+                    "HISTORY STALE REJECTED provider=kotak_neo symbol=%s tf=%s last_age=%s",
+                    canonical, tf, _last_candle_age_seconds(df),
+                )
+
+            # If Kotak is temporarily rate-limited, use the last GOOD cache for
+            # a bounded period rather than falling back to arbitrary old chunks.
+            cached = _CACHE.get(key)
+            if cached and now - cached[0] <= _STALE_FALLBACK_SECONDS and _is_reasonably_fresh(cached[1], tf):
+                logger.warning(
+                    "HISTORY STALE-CACHE FALLBACK provider=kotak_neo symbol=%s tf=%s cache_age=%.1fs",
+                    canonical, tf, now - cached[0],
+                )
+                return cached[1].tail(int(limit)).copy()
+
+            logger.warning(
+                "HISTORY FAILED provider=kotak_neo symbol=%s tf=%s no_safe_cache=1",
+                canonical, tf,
             )
-            return df
-
-        logger.warning(
-            "HISTORY FAILED provider=kotak_neo symbol=%s tf=%s",
-            canonical,
-            resolution,
-        )
-        return _empty()
+            return _empty()
 
     logger.warning(
         "No history provider configured for %s (provider=%s)",
@@ -231,7 +323,7 @@ def get_multi_timeframe_history(symbol, limit=DEFAULT_LIMIT):
         for tf in resolutions:
             try:
                 result[tf] = get_history(canonical, tf, limit)
-                time.sleep(0.20)
+                time.sleep(0.35)
             except Exception:
                 logger.exception(
                     "TIMEFRAME ERROR symbol=%s tf=%s",
