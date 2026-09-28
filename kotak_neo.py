@@ -594,13 +594,9 @@ def _extract_quote(response):
                 "low": _to_float(value("low")),
                 "close": _to_float(value("close")),
                 "volume": _to_float(
-                    _first(
-                        obj,
-                        "volume",
-                        "last_volume",
-                        "volumeTraded",
-                    )
+                    _first(obj, "volume", "last_volume", "volumeTraded", "totalTradedVolume")
                 ),
+                "oi": _to_float(_first(obj, "oi", "open_interest", "openInterest", "open_int")),
                 "change": _to_float(
                     _first(
                         obj,
@@ -689,6 +685,51 @@ def get_quote(symbol):
 
     return None
 
+
+
+def get_index_future_quote(symbol):
+    """Best-effort live near-month index future quote from Kotak Neo.
+    Returns NO DATA rather than substituting spot or fabricating OI/volume.
+    """
+    canonical = canonical_symbol(symbol)
+    base = {"NIFTY50":"NIFTY", "BANKNIFTY":"BANKNIFTY", "NIFTYIT":"NIFTYIT"}.get(canonical)
+    if not base:
+        return None
+    client = _client()
+    search = getattr(client, "search_scrip", None)
+    if not callable(search):
+        return None
+    records=[]
+    for kwargs in (
+        {"exchange_segment":"nse_fo","symbol":base,"expiry":"","option_type":"FUT","strike_price":""},
+        {"exchange_segment":"nse_fo","symbol":base},
+    ):
+        try:
+            records = _extract_search_records(search(**kwargs))
+            if records: break
+        except TypeError:
+            continue
+        except Exception as exc:
+            logger.warning("KOTAK futures search failed %s: %s", canonical, exc)
+    fut=[]
+    for r in records:
+        it=_text(r.get("instrument_type")).upper(); ts=_text(r.get("trading_symbol")).upper()
+        if "FUT" in it or ts.endswith("FUT") or "FUT" in ts:
+            fut.append(r)
+    if not fut:
+        return None
+    fut.sort(key=lambda r:_expiry_key(r.get("expiry")))
+    record=fut[0]
+    market={"neo_exchange_segment":"nse_fo"}
+    for token in _quote_candidates(record, market):
+        try:
+            q=_extract_quote(client.quotes(instrument_tokens=[token], quote_type="all"))
+            if q:
+                q.update(symbol=canonical, source="kotak_neo", contract=record.get("trading_symbol"), expiry=record.get("expiry"), instrument_type=record.get("instrument_type"))
+                return q
+        except Exception as exc:
+            logger.warning("KOTAK futures quote failed %s: %s", canonical, exc)
+    return None
 
 def get_current_price(symbol):
     quote = get_quote(symbol)
