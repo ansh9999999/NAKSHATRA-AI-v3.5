@@ -40,7 +40,10 @@ except Exception:
 
 
 CACHE_TTL = 180
+_TIMEFRAME_TTL = 60
 _analysis_cache = {}
+_timeframe_cache = {}
+_sentiment_cache = {"time": 0.0, "data": None}
 
 
 def _json_safe(value):
@@ -214,16 +217,48 @@ def _trend_from_close(df):
     except Exception:return {"trend":"UNKNOWN"}
 
 def _enrich_timeframes(symbol,analysis):
-    if not isinstance(analysis,dict):return analysis
+    if not isinstance(analysis,dict): return analysis
+    now=time.time()
+    cached=_timeframe_cache.get(symbol)
+    if cached and now-cached["time"] < _TIMEFRAME_TTL:
+        analysis["derived_timeframes"]=cached["data"]
+        return analysis
     try:
         data=get_multi_timeframe_history(symbol,limit=220); d={}
         for tf in ("5m","15m","1h","1d","1w"):
-            if tf in data and data[tf] is not None and not data[tf].empty:d[tf]=_trend_from_close(data[tf])
+            if tf in data and data[tf] is not None and not data[tf].empty:
+                d[tf]=_trend_from_close(data[tf])
         if "1w" not in d and data.get("1d") is not None and len(data["1d"])>=10:
-            x=data["1d"].copy().reset_index(drop=True); x["grp"]=x.index//5; w=x.groupby("grp").agg({"close":"last"}); d["1w"]=_trend_from_close(w); d["1w"]["source"]="derived from 1D candles (5 trading sessions)"
+            x=data["1d"].copy().reset_index(drop=True); x["grp"]=x.index//5
+            w=x.groupby("grp").agg({"close":"last"}); d["1w"]=_trend_from_close(w)
+            d["1w"]["source"]="derived from 1D candles (5 trading sessions)"
+        _timeframe_cache[symbol]={"time":now,"data":d}
         analysis["derived_timeframes"]=d
-    except Exception as e:analysis["derived_timeframes_error"]=str(e)
+    except Exception as e:
+        analysis["derived_timeframes_error"]=str(e)
+        if cached: analysis["derived_timeframes"]=cached["data"]
     return analysis
+
+
+def _public_sentiment():
+    """Small cached public Fear & Greed feed; never used as live order-flow."""
+    import requests
+    now=time.time()
+    if _sentiment_cache.get("data") is not None and now-_sentiment_cache.get("time",0) < 300:
+        return _sentiment_cache["data"]
+    try:
+        r=requests.get("https://api.alternative.me/fng/?limit=1&format=json",timeout=4)
+        r.raise_for_status()
+        item=(r.json().get("data") or [None])[0]
+        if not item: raise RuntimeError("Fear & Greed feed returned no data")
+        value=int(float(item.get("value")))
+        label=str(item.get("value_classification") or "Unknown")
+        bias="BULLISH" if value>=55 else "BEARISH" if value<=45 else "NEUTRAL"
+        out={"status":"OK","bias":bias,"fear_greed":f"{label} ({value})","score":round((value-50)/50,2),"social_sentiment":"NOT CONNECTED","news_sentiment":"NOT CONNECTED","source":"Alternative.me Fear & Greed","note":"Fear & Greed is a broad sentiment gauge; it is not live institutional order flow."}
+        _sentiment_cache.update(time=now,data=out)
+        return out
+    except Exception as exc:
+        return {"status":"NO DATA","bias":"WAIT","fear_greed":"NOT CONNECTED","social_sentiment":"NOT CONNECTED","news_sentiment":"NOT CONNECTED","score":None,"source":"Alternative.me unavailable","note":str(exc)}
 
 @app.get("/", response_class=HTMLResponse)
 async def home_page(request: Request):
@@ -283,6 +318,13 @@ def api_live(symbol: str = "BTCUSD", force: bool = False):
             ingest_position_shift(symbol, spot, oc)
             intel = get_nse_intelligence(symbol)
             sent = (intel or {}).get("sentiment", {})
+            public_sent = _public_sentiment()
+            merged_sent = dict(public_sent or {})
+            if isinstance(sent, dict):
+                merged_sent.update({k:v for k,v in sent.items() if v not in (None, "", "NOT CONNECTED")})
+            analysis["option_chain"] = oc
+            analysis["nse_intelligence"] = intel
+            analysis["sentiment"] = merged_sent
             option_ok = oc.get("status") == "OK" and oc.get("row_count", 0) > 0
             sentiment_ok = sent.get("status") == "OK"
             quality = {"status": "OK" if option_ok and sentiment_ok else "DATA RISK", "option_chain": option_ok, "sentiment": sentiment_ok}
@@ -307,6 +349,9 @@ def api_live(symbol: str = "BTCUSD", force: bool = False):
             futures_payload = {"futures": fut, "combined": combine_futures_options(fut, oc or {"status":"NO DATA"})}
         except Exception as exc:
             futures_payload = {"futures":{"status":"ERROR","reason":str(exc)},"combined":{"status":"DATA RISK","view":"WAIT","action":"WAIT"}}
+    if isinstance(analysis, dict):
+        analysis["futures_intelligence"] = futures_payload
+
     option_trade = _build_option_buy_plan(symbol, analysis, oc)
     if option_trade.get("status") == "READY" and shift.get("status") == "OK":
         needed = "BULLISH" if option_trade.get("option_type") == "CALL" else "BEARISH"
