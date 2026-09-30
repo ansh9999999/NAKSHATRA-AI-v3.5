@@ -15,7 +15,7 @@ from market_registry import canonical_symbol
 
 _LOCK = threading.Lock()
 _CACHE = {}
-_TTL = 8.0
+_TTL = 15.0
 
 
 def _num(v):
