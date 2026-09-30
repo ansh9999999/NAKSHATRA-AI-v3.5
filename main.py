@@ -31,6 +31,7 @@ from futures_intelligence import get_futures_intelligence, combine_futures_optio
 from analysis.option_chain_engine import analyze_option_chain
 from nse_intelligence import get_nse_intelligence
 from position_shift_engine import ingest as ingest_position_shift, analyze as analyze_position_shift
+from market_shift_engine import detect_market_shift
 
 try:
     from delta import get_ticker as delta_get_ticker
@@ -191,7 +192,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="NAKSHATRA AI",
-    version="5.15",
+    version="5.18",
     lifespan=lifespan,
 )
 
@@ -251,7 +252,7 @@ def health():
 def api():
     return {
         "project": "NAKSHATRA AI",
-        "version": "5.13",
+        "version": "5.18",
         "status": "RUNNING",
         "supported_symbols": symbols(),
         "provider_routing": {
@@ -269,6 +270,7 @@ def api_live(symbol: str = "BTCUSD", force: bool = False):
     analysis = run_analysis(symbol, force=force)
     analysis = _enrich_timeframes(symbol, analysis)
     ticker = _get_market_quote(symbol)
+    market_shift = detect_market_shift(symbol)
 
     # v2.10 data-quality gate for index decisions. A strong directional call
     # is not allowed when the option chain or positioning sentiment is absent.
@@ -298,6 +300,13 @@ def api_live(symbol: str = "BTCUSD", force: bool = False):
             analysis["data_quality"] = quality
 
     shift = analyze_position_shift(symbol) if symbol in ("NIFTY50","BANKNIFTY") else {"status":"NOT_REQUIRED"}
+    futures_payload = {"futures":{"status":"NOT_REQUIRED"},"combined":{"status":"NOT_REQUIRED"}}
+    if symbol in ("NIFTY50","BANKNIFTY","NIFTYIT"):
+        try:
+            fut = get_futures_intelligence(symbol, (ticker or {}).get("ltp") or (ticker or {}).get("price") or (ticker or {}).get("close"))
+            futures_payload = {"futures": fut, "combined": combine_futures_options(fut, oc or {"status":"NO DATA"})}
+        except Exception as exc:
+            futures_payload = {"futures":{"status":"ERROR","reason":str(exc)},"combined":{"status":"DATA RISK","view":"WAIT","action":"WAIT"}}
     option_trade = _build_option_buy_plan(symbol, analysis, oc)
     if option_trade.get("status") == "READY" and shift.get("status") == "OK":
         needed = "BULLISH" if option_trade.get("option_type") == "CALL" else "BEARISH"
@@ -305,7 +314,9 @@ def api_live(symbol: str = "BTCUSD", force: bool = False):
             option_trade = {"status":"WAIT","action":"NO OPTION BUY","reason":"Live position shift conflicts with the directional signal.","position_shift":shift}
         else:
             option_trade["position_shift"] = shift
-    if isinstance(analysis, dict): analysis["option_trade"] = option_trade
+    if isinstance(analysis, dict):
+        analysis["option_trade"] = option_trade
+        analysis["market_shift"] = market_shift
 
     return _json_safe({
         "status": (
@@ -320,6 +331,8 @@ def api_live(symbol: str = "BTCUSD", force: bool = False):
         "data_quality": quality,
         "option_trade": option_trade,
         "position_shift": shift,
+        "market_shift": market_shift,
+        "futures_intelligence": futures_payload,
     })
 
 
@@ -360,6 +373,16 @@ def api_futures(symbol: str = "NIFTY50"):
 def api_position_shift(symbol: str = "NIFTY50"):
     symbol = canonical_symbol(symbol)
     return _json_safe(analyze_position_shift(symbol))
+
+
+@app.get("/api/market-shift")
+def api_market_shift(symbol: str = "NIFTY50"):
+    symbol = canonical_symbol(symbol)
+    try:
+        return _json_safe(detect_market_shift(symbol))
+    except Exception as exc:
+        logger.exception("MARKET SHIFT ERROR %s", symbol)
+        return {"status":"ERROR","symbol":symbol,"error":str(exc)}
 
 
 @app.get("/api/nse-intelligence")
