@@ -2,6 +2,17 @@ function renderCatalysts(d){const items=(d&&d.items)||[];set('eventRisk',items.s
 async function loadCatalysts(){try{const r=await fetch(`/api/catalysts?symbol=${encodeURIComponent(symbol)}&_=${Date.now()}`,{cache:'no-store'});renderCatalysts(await r.json())}catch(e){set('eventRisk','DATA RISK');set('eventDisclaimer','Catalyst feed unavailable')}}
 
 
+function displayValue(v){
+ if(v===null||v===undefined||v==='') return '—';
+ if(typeof v==='object'){
+  const preferred=['bias','trend','impact','name','value','label','score','text'];
+  for(const k of preferred){ if(v[k]!==undefined && v[k]!==null && typeof v[k]!=='object') return String(v[k]); }
+  const parts=Object.entries(v).filter(([k,val])=>val!==null&&val!==undefined&&typeof val!=='object').slice(0,3).map(([k,val])=>`${k}: ${val}`);
+  return parts.length?parts.join(' • '):'—';
+ }
+ return String(v);
+}
+
 function renderPositionShift(x){x=x||{};set('shiftStatus',`● ${x.status||'NO DATA'}`);set('shiftBias',x.bias||'WAIT');paint('shiftBias',x.bias);set('shiftPhase',x.phase||'—');set('shiftStrength',`${x.strength||0}/100`);set('shiftAction',x.action||'WAIT');paint('shiftAction',x.bias);for(const k of ['1m','3m','5m','15m']){const v=x.windows?.[k]?.score;set('shift'+k.replace('m','m'),v==null?'—':`${v>0?'+':''}${v}`)}set('shiftNote',x.note||x.message||'Collecting live snapshots…')}
 async function loadPositionShift(){try{const r=await fetch(`/api/position-shift?symbol=${encodeURIComponent(symbol)}&_=${Date.now()}`,{cache:'no-store'});renderPositionShift(await r.json())}catch(e){set('shiftStatus','● ERROR')}}
 
@@ -113,7 +124,7 @@ function renderFutures(d){const f=d?.futures||{},c=d?.combined||{};set('futureSt
 async function loadFutures(){try{const r=await fetch(`/api/futures?symbol=${encodeURIComponent(symbol)}&_=${Date.now()}`,{cache:'no-store'});renderFutures(await r.json())}catch(e){set('futureStatus','● ERROR')}}
 
 function render(a){
- const x=a.analysis||{},t=a.ticker||{},o=x.option_chain||{},it=x.intraday_trend||{},ast=x.astrology||{},numx=x.numerology||{},sent=x.sentiment||{},ag=x.agreement_detail||{};
+ const x=a.analysis||{},t=a.ticker||{},o=a.option_chain||x.option_chain||{},it=x.intraday_trend||{},ast=x.astrology||{},numx=x.numerology||{},sent=a.sentiment||x.sentiment||{},ag=x.agreement_detail||{};
  const by={};(it.timeframes||[]).forEach(z=>by[z.timeframe]=z); const tr=x.technical?.trend||{}; const dt=x.derived_timeframes||{};
  const price=num(t.ltp??t.price??t.close??x.price); let perChange=num(t.percent_change??t.per_change??t.perChange??t.change_24h); if(perChange===null){const prev=num(t.previous_close??t.prev_close??t.close); const px=num(t.ltp??t.price); if(prev&&px&&Math.abs(px-prev)>0) perChange=((px-prev)/prev)*100;}
  set('marketSymbol',symbol==='NIFTY50'?'NIFTY 50':symbol.replace('CRUDEOIL','CRUDE OIL'));set('price',fmt(price));set('change',perChange===null?'1D change unavailable':`1D ${perChange>=0?'▲':'▼'} ${fmt(Math.abs(perChange))}%`);set('dayChange',perChange===null?'—':`${perChange>=0?'▲':'▼'} ${fmt(Math.abs(perChange))}%`);set('dayChangePct',t.change!=null?`${t.change>=0?'+':''}${fmt(t.change)}`:'—');paint('change',perChange>=0?'BULLISH':'BEARISH');paint('dayChange',perChange>=0?'BULLISH':'BEARISH');paint('dayChangePct',perChange>=0?'BULLISH':'BEARISH');set('dayHigh',fmt(t.high??x.day_high));set('dayLow',fmt(t.low??x.day_low));if(!['NIFTY50','BANKNIFTY'].includes(symbol)){set('dayVolume',fmt(t.volume,0));set('openInterest',fmt(t.oi??x.open_interest,0));}
@@ -126,10 +137,10 @@ function render(a){
  const fut=x.futures_intelligence||a.futures_intelligence||{}; const f=fut.futures||{}; const fc=fut.combined||{}; const ms=a.market_shift||x.market_shift||{}; const ps=a.position_shift||{}; set('foFutureBias',fc.futures_bias||((f.buildup||'').includes('LONG')?'BULLISH':(f.buildup||'').includes('SHORT')?'BEARISH':'NEUTRAL')); set('foOptionBias',fc.options_bias||o.signal||'—'); set('foMarketShift',ms.bias||'WAIT'); set('foPositionShift',ps.bias||'WAIT'); set('foDecisionView',fc.view||'WAIT'); set('foDecisionAction',fc.action||'WAIT'); paint('foFutureBias',fc.futures_bias);paint('foOptionBias',fc.options_bias||o.signal);paint('foMarketShift',ms.bias);paint('foPositionShift',ps.bias);paint('foDecisionView',fc.view);paint('foDecisionAction',fc.action); set('foDecisionStatus',fc.status||'PARTIAL'); set('foDecisionReason', ms.shift_detected ? `Market shift: ${ms.shift_type||'detected'} • ${ms.phase||'SHIFTING'}; require futures/options confirmation before CE/PE.` : (fc.view==='CONFLICT'?'Futures and options disagree → WAIT.':'Futures + options comparison updated from live snapshots.'));
  $('reasons').innerHTML=(x.reasons||[]).slice(0,6).map(r=>`<div>• ${esc(r)}</div>`).join('')||'<div>No high-quality reasons returned.</div>'; const tech=x.technical||{};set('moduleTechnical',tech.signal||'—');paint('moduleTechnical',tech.signal);set('moduleOption',o.signal||'—');paint('moduleOption',o.signal);set('moduleAstrology',ast.bias||'—');set('moduleAstrology2',ast.bias||'—');set('moduleNumerology',numx.bias||'—');set('moduleNumerology2',numx.bias||'—');set('trend',tr.overall_trend||it.overall||'—');paint('trend',tr.overall_trend||it.overall);['tf5','tf15','tf1h','tf1d','tf1w','intra5','intra15','intra1h'].forEach(id=>paint(id,$(id)?.textContent));
  $('metrics').innerHTML=[['EMA9',tr['5m']?.ema9],['EMA50',tr['5m']?.ema50],['EMA200',tr['5m']?.ema200],['RSI',tech.momentum?.rsi??x.rsi],['MACD',tech.momentum?.macd??x.macd],['ATR',x.atr??'—'],['Technical Score',tech.confidence??tech.score],['MTF Score',tr.total_score]].map(q=>`<div><small>${q[0]}</small><b>${fmt(q[1],4)}</b></div>`).join('');
- $('astroRows').innerHTML=[['Rashi Trend',ast.rashi_trend||ast.bias],['Nakshatra',ast.nakshatra_influence||ast.nakshatra],['Tithi',ast.tithi_impact||ast.tithi],['Yoga',ast.yoga],['Karana',ast.karana],['Planetary',ast.planetary_alignment],['Score',ast.score]].map(q=>`<div><span>${esc(q[0])}</span><b>${esc(q[1])}</b></div>`).join('');
- $('numRows').innerHTML=[['Life Path',numx.life_path],['Expression',numx.expression_number],['Day Vibration',numx.day_vibration],['Market Number',numx.market_number],['Score',numx.score]].map(q=>`<div><span>${esc(q[0])}</span><b>${esc(q[1])}</b></div>`).join('');
+ $('astroRows').innerHTML=[['Rashi Trend',ast.rashi_trend||ast.bias],['Nakshatra',ast.nakshatra_influence||ast.nakshatra],['Tithi',ast.tithi_impact||ast.tithi],['Yoga',ast.yoga],['Karana',ast.karana],['Planetary',ast.planetary_alignment],['Score',ast.score]].map(q=>`<div><span>${esc(q[0])}</span><b>${esc(displayValue(q[1]))}</b></div>`).join('');
+ $('numRows').innerHTML=[['Life Path',numx.life_path],['Expression',numx.expression_number],['Day Vibration',numx.day_vibration],['Market Number',numx.market_number],['Score',numx.score]].map(q=>`<div><span>${esc(q[0])}</span><b>${esc(displayValue(q[1]))}</b></div>`).join('');
  const sb=sent.bias||sent.signal||sent.overall||'NOT CONNECTED';set('sentimentBias',sb);$('sentimentRows').innerHTML=[['Social Sentiment',sent.social_sentiment||'NOT CONNECTED'],['News Sentiment',sent.news_sentiment||'NOT CONNECTED'],['Fear/Greed',sent.fear_greed||'NOT CONNECTED'],['Overall Score',sent.score??'—']].map(q=>`<div><span>${esc(q[0])}</span><b>${esc(q[1])}</b></div>`).join('');
- renderOption(o,price);set('agreeTechnical',ag.technical||tech.signal||'—');paint('agreeTechnical',ag.technical||tech.signal);set('agreeOptions',ag.option_chain||o.signal||'—');paint('agreeOptions',ag.option_chain||o.signal);set('agreeAstrology',ag.astrology||ast.bias||'—');paint('agreeAstrology',ag.astrology||ast.bias);set('agreeNumerology',ag.numerology||numx.bias||'—');paint('agreeNumerology',ag.numerology||numx.bias);set('agreeFinal',ag.final||x.agreement||'—');paint('agreeFinal',ag.final||x.agreement);
+ renderParticipant(a.nse_intelligence||x.nse_intelligence||{}); renderFutures(a.futures_intelligence||x.futures_intelligence||{}); renderOption(o,price);set('agreeTechnical',ag.technical||tech.signal||'—');paint('agreeTechnical',ag.technical||tech.signal);set('agreeOptions',ag.option_chain||o.signal||'—');paint('agreeOptions',ag.option_chain||o.signal);set('agreeAstrology',ag.astrology||ast.bias||'—');paint('agreeAstrology',ag.astrology||ast.bias);set('agreeNumerology',ag.numerology||numx.bias||'—');paint('agreeNumerology',ag.numerology||numx.bias);set('agreeFinal',ag.final||x.agreement||'—');paint('agreeFinal',ag.final||x.agreement);
  set('status','● KOTAK LIVE');set('dataState','● LIVE');set('updateStatus',`Updated ${new Date().toLocaleTimeString()}`);
 }
 async function load(){
@@ -142,7 +153,7 @@ async function load(){
   if(!r.ok) throw new Error(`HTTP ${r.status}`);
   const d=await r.json();
   if(d && (d.ticker || d.analysis)){
-    render(d); loadOptions(); loadFutures(); loadNSEIntelligence(); loadCatalysts();
+    render(d); loadCatalysts();
     if(d.status!=='OK' && d.analysis?.status!=='OK'){
       set('status','● DATA RISK');
       set('dataState','● DATA RISK');
@@ -162,4 +173,4 @@ async function load(){
 
 async function scanner(){try{const r=await fetch('/api/scanner?_='+Date.now(),{cache:'no-store'});const d=await r.json();const arr=Array.isArray(d)?d:(d.markets||[]);$('scanner').innerHTML=arr.map(x=>`<div class="scanner-row"><b>${esc(x.symbol)}</b><span>${esc(x.signal||x.recommendation||'WAIT')}</span><small>${esc(x.strength??x.confidence??'—')}</small></div>`).join('')||'No scanner data'}catch(e){$('scanner').textContent='Scanner unavailable'}}
 async function trades(){try{const r=await fetch('/api/history?_='+Date.now(),{cache:'no-store'});const d=await r.json();const arr=Array.isArray(d)?d:(d.history||[]);$('trades').innerHTML=(arr||[]).slice(-8).reverse().map(x=>`<tr><td>${esc(x.symbol)}</td><td>${esc(x.side)}</td><td>${esc(fmt(x.entry))}</td><td>${esc(fmt(x.pnl))}</td><td>${esc(x.status)}</td></tr>`).join('')||'<tr><td colspan="5">No trades yet</td></tr>';$('equitySummary').textContent=arr?.length?`${arr.length} recorded trades`:'No recorded trades'}catch(e){$('equitySummary').textContent='Trade history unavailable'}}
-document.querySelectorAll('.symbol').forEach(b=>b.onclick=()=>selectSymbol(b.dataset.symbol));$('refreshBtn')?.addEventListener('click',()=>{load();scanner();trades();loadOptions();loadNSEIntelligence();loadCatalysts()});load();scanner();trades();loadOptions();loadNSEIntelligence();loadCatalysts();loadPositionShift();setInterval(()=>{load();loadOptions();loadPositionShift()},15000);setInterval(()=>{scanner();loadNSEIntelligence()},60000);
+document.querySelectorAll('.symbol').forEach(b=>b.onclick=()=>selectSymbol(b.dataset.symbol));$('refreshBtn')?.addEventListener('click',()=>{load();scanner();trades();loadCatalysts()});load();scanner();trades();loadCatalysts();setInterval(()=>{load()},15000);setInterval(()=>{scanner()},60000);
