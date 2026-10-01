@@ -19,13 +19,13 @@ async function loadPositionShift(){try{const r=await fetch(`/api/position-shift?
 function renderMarketShift(x){x=x||{};set('marketShiftStatus',`● ${x.status||'NO DATA'}`);set('marketShiftBias',x.bias||'WAIT');set('marketShiftPhase',x.phase||'—');set('marketShiftStrength',`${x.strength??0}/100`);set('marketShiftAction',x.action||'WAIT');set('marketShift5Score',x.score_5m==null?'—':`${x.score_5m>0?'+':''}${x.score_5m}`);set('marketShift15Score',x.confirm_15m?.score==null?'—':`${x.confirm_15m.score>0?'+':''}${Math.round(x.confirm_15m.score)}`);set('marketShiftDelta',x.score_change==null?'—':`${x.score_change>0?'+':''}${Math.round(x.score_change)}`);set('marketShiftType',x.shift_type||'—');paint('marketShiftBias',x.bias);paint('marketShiftAction',x.action);set('marketShiftReason',(x.current_5m?.reasons||[]).slice(0,4).join(' • ')||x.error||'Waiting for valid 5M market data.');set('marketShiftNote',x.shift_detected?`Shift detected on latest 5M candle: ${x.detected_candle||'latest candle'}.`:(x.note||'No new regime shift detected.'))}
 function renderOptionTradePlan(o){const p=o||{};if(p.status==='READY'){set('optionBuy',p.contract?`${p.action} • ${p.contract}`:(p.action||'OPTION BUY'));set('optionLtp',p.ltp!=null?fmt(p.ltp):'—');set('optionExpiry',p.expiry||'—');paint('optionBuy',p.option_type==='CALL'?'BUY':'SELL')}else{set('optionBuy','WAIT • NO OPTION BUY');set('optionLtp','—');set('optionExpiry','—');paint('optionBuy','WAIT')}}
 const APP_VERSION='6.9.0';
-let symbol='NIFTY50',busy=false;
+let symbol='NIFTY50',busy=false; let selectedDisplayName='NIFTY 50'; let equitySearchTimer=null;
 const $=id=>document.getElementById(id);
 const esc=v=>String(v??'—').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'",'&#039;');
 const num=v=>{const n=Number(v);return Number.isFinite(n)?n:null};
 const fmt=(v,d=2)=>{const n=num(v);return n===null?'—':n.toLocaleString('en-IN',{maximumFractionDigits:d})};
 function set(id,v){if($(id))$(id).textContent=v??'—'}
-function selectSymbol(s){symbol=s.toUpperCase();document.querySelectorAll('.symbol').forEach(b=>b.classList.toggle('active',b.dataset.symbol===symbol));load()}
+function selectSymbol(s,displayName){symbol=s.toUpperCase();selectedDisplayName=displayName||symbol;document.querySelectorAll('.symbol').forEach(b=>b.classList.toggle('active',b.dataset.symbol===symbol));load()}
 function biasClass(v){const s=String(v||'').toUpperCase();return s.includes('BULL')||s.includes('BUY')?'bull':s.includes('BEAR')||s.includes('SELL')?'bear':s.includes('WAIT')||s.includes('SIDEWAYS')||s.includes('NEUTRAL')?'wait':''}
 function paint(id,v){const el=$(id);if(el)el.className=(el.className||'').replace(/\b(bull|bear|wait)\b/g,'').trim()+' '+biasClass(v)}
 function normalizeRows(o){
@@ -127,7 +127,7 @@ function render(a){
  const x=a.analysis||{},t=a.ticker||{},o=a.option_chain||x.option_chain||{},it=x.intraday_trend||{},ast=x.astrology||{},numx=x.numerology||{},sent=a.sentiment||x.sentiment||{},ag=x.agreement_detail||{};
  const by={};(it.timeframes||[]).forEach(z=>by[z.timeframe]=z); const tr=x.technical?.trend||{}; const dt=x.derived_timeframes||{};
  const price=num(t.ltp??t.price??t.close??x.price); let perChange=num(t.percent_change??t.per_change??t.perChange??t.change_24h); if(perChange===null){const prev=num(t.previous_close??t.prev_close??t.close); const px=num(t.ltp??t.price); if(prev&&px&&Math.abs(px-prev)>0) perChange=((px-prev)/prev)*100;}
- set('marketSymbol',symbol==='NIFTY50'?'NIFTY 50':symbol.replace('CRUDEOIL','CRUDE OIL'));set('price',fmt(price));set('change',perChange===null?'1D change unavailable':`1D ${perChange>=0?'▲':'▼'} ${fmt(Math.abs(perChange))}%`);set('dayChange',perChange===null?'—':`${perChange>=0?'▲':'▼'} ${fmt(Math.abs(perChange))}%`);set('dayChangePct',t.change!=null?`${t.change>=0?'+':''}${fmt(t.change)}`:'—');paint('change',perChange>=0?'BULLISH':'BEARISH');paint('dayChange',perChange>=0?'BULLISH':'BEARISH');paint('dayChangePct',perChange>=0?'BULLISH':'BEARISH');set('dayHigh',fmt(t.high??x.day_high));set('dayLow',fmt(t.low??x.day_low));if(!['NIFTY50','BANKNIFTY'].includes(symbol)){set('dayVolume',fmt(t.volume,0));set('openInterest',fmt(t.oi??x.open_interest,0));}
+ set('marketSymbol',selectedDisplayName||(symbol==='NIFTY50'?'NIFTY 50':symbol.replace('CRUDEOIL','CRUDE OIL')));set('price',fmt(price));set('change',perChange===null?'1D change unavailable':`1D ${perChange>=0?'▲':'▼'} ${fmt(Math.abs(perChange))}%`);set('dayChange',perChange===null?'—':`${perChange>=0?'▲':'▼'} ${fmt(Math.abs(perChange))}%`);set('dayChangePct',t.change!=null?`${t.change>=0?'+':''}${fmt(t.change)}`:'—');paint('change',perChange>=0?'BULLISH':'BEARISH');paint('dayChange',perChange>=0?'BULLISH':'BEARISH');paint('dayChangePct',perChange>=0?'BULLISH':'BEARISH');set('dayHigh',fmt(t.high??x.day_high));set('dayLow',fmt(t.low??x.day_low));if(!['NIFTY50','BANKNIFTY'].includes(symbol)){set('dayVolume',fmt(t.volume,0));set('openInterest',fmt(t.oi??x.open_interest,0));}
  const decision=String(x.recommendation||x.signal||'WAIT').toUpperCase();set('decision',decision);paint('decision',decision);paint('whyDecision',decision);set('whyDecision',decision);const conf=num(x.confidence??x.overall_confidence);set('confidence',`Strength ${fmt(conf,0)}/100`);if($('confidenceBar')){$('confidenceBar').style.width=`${Math.max(0,Math.min(100,conf||0))}%`;$('confidenceBar').className=biasClass(decision)}
  set('agreementMini',`Agreement ${ag.final||x.agreement||'—'}`);set('agreementMini2',ag.final||x.agreement||'—');
  set('tf5',tr['5m']?.trend||by['5m']?.trend||dt['5m']?.trend||'UNKNOWN');set('tf15',tr['15m']?.trend||by['15m']?.trend||dt['15m']?.trend||'UNKNOWN');set('tf1h',tr['1h']?.trend||by['1h']?.trend||dt['1h']?.trend||'UNKNOWN');set('tf1d',tr['1d']?.trend||by['1d']?.trend||dt['1d']?.trend||'UNKNOWN');set('tf1w',tr['1w']?.trend||by['1w']?.trend||dt['1w']?.trend||'UNKNOWN');
@@ -143,6 +143,24 @@ function render(a){
  renderParticipant(a.nse_intelligence||x.nse_intelligence||{}); renderFutures(a.futures_intelligence||x.futures_intelligence||{}); renderOption(o,price);set('agreeTechnical',ag.technical||tech.signal||'—');paint('agreeTechnical',ag.technical||tech.signal);set('agreeOptions',ag.option_chain||o.signal||'—');paint('agreeOptions',ag.option_chain||o.signal);set('agreeAstrology',ag.astrology||ast.bias||'—');paint('agreeAstrology',ag.astrology||ast.bias);set('agreeNumerology',ag.numerology||numx.bias||'—');paint('agreeNumerology',ag.numerology||numx.bias);set('agreeFinal',ag.final||x.agreement||'—');paint('agreeFinal',ag.final||x.agreement);
  set('status','● KOTAK LIVE');set('dataState','● LIVE');set('updateStatus',`Updated ${new Date().toLocaleTimeString()}`);
 }
+
+function renderEquityResults(d){
+ const box=$('equityResults'); if(!box)return; const rows=d?.results||[];
+ if(!rows.length){box.style.display=d?.query?'block':'none';box.innerHTML=d?.query?'<div class="equity-result"><small>No matching equity found.</small></div>':'';return;}
+ box.style.display='block';
+ box.innerHTML=rows.map(x=>`<div class="equity-result" data-symbol="${esc(x.symbol)}" data-name="${esc(x.trading_symbol||x.name||x.symbol)}"><div><b>${esc(x.trading_symbol||'—')}</b><small>${esc(x.name||'')}</small></div><span class="equity-exchange">${esc(x.exchange||'NSE')}</span></div>`).join('');
+ box.querySelectorAll('.equity-result[data-symbol]').forEach(el=>el.onclick=()=>{selectSymbol(el.dataset.symbol,el.dataset.name);box.style.display='none';$('equitySearch').value='';});
+}
+async function searchEquities(q){
+ try{const r=await fetch(`/api/equity-search?q=${encodeURIComponent(q)}&limit=12&_=${Date.now()}`,{cache:'no-store'});renderEquityResults(await r.json())}
+ catch(e){const b=$('equityResults');if(b){b.style.display='block';b.innerHTML='<div class="equity-result"><small>Equity search unavailable.</small></div>';}}
+}
+function initEquitySearch(){
+ const input=$('equitySearch'); if(!input)return;
+ input.addEventListener('input',()=>{clearTimeout(equitySearchTimer);const q=input.value.trim();if(q.length<2){$('equityResults').style.display='none';return;}equitySearchTimer=setTimeout(()=>searchEquities(q),350);});
+ input.addEventListener('keydown',e=>{if(e.key==='Escape'){$('equityResults').style.display='none';input.blur();}});
+}
+
 async function load(){
  if(busy)return;
  busy=true;
@@ -173,4 +191,4 @@ async function load(){
 
 async function scanner(){try{const r=await fetch('/api/scanner?_='+Date.now(),{cache:'no-store'});const d=await r.json();const arr=Array.isArray(d)?d:(d.markets||[]);$('scanner').innerHTML=arr.map(x=>`<div class="scanner-row"><b>${esc(x.symbol)}</b><span>${esc(x.signal||x.recommendation||'WAIT')}</span><small>${esc(x.strength??x.confidence??'—')}</small></div>`).join('')||'No scanner data'}catch(e){$('scanner').textContent='Scanner unavailable'}}
 async function trades(){try{const r=await fetch('/api/history?_='+Date.now(),{cache:'no-store'});const d=await r.json();const arr=Array.isArray(d)?d:(d.history||[]);$('trades').innerHTML=(arr||[]).slice(-8).reverse().map(x=>`<tr><td>${esc(x.symbol)}</td><td>${esc(x.side)}</td><td>${esc(fmt(x.entry))}</td><td>${esc(fmt(x.pnl))}</td><td>${esc(x.status)}</td></tr>`).join('')||'<tr><td colspan="5">No trades yet</td></tr>';$('equitySummary').textContent=arr?.length?`${arr.length} recorded trades`:'No recorded trades'}catch(e){$('equitySummary').textContent='Trade history unavailable'}}
-document.querySelectorAll('.symbol').forEach(b=>b.onclick=()=>selectSymbol(b.dataset.symbol));$('refreshBtn')?.addEventListener('click',()=>{load();scanner();trades();loadCatalysts()});load();scanner();trades();loadCatalysts();setInterval(()=>{load()},15000);setInterval(()=>{scanner()},60000);
+document.querySelectorAll('.symbol').forEach(b=>b.onclick=()=>{selectedDisplayName=b.textContent.trim();selectSymbol(b.dataset.symbol,selectedDisplayName)});initEquitySearch();$('refreshBtn')?.addEventListener('click',()=>{load();scanner();trades();loadCatalysts()});load();scanner();trades();loadCatalysts();setInterval(()=>{load()},15000);setInterval(()=>{scanner()},60000);
