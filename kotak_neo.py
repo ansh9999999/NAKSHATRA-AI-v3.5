@@ -698,6 +698,103 @@ def get_quote(symbol):
     return None
 
 
+def get_index_future_quote(symbol):
+    """Return the nearest available NSE index-futures quote.
+
+    This compatibility helper is intentionally read-only.  Futures are
+    discovered through Kotak Neo's search_scrip endpoint and the nearest
+    expiry is selected; no order API is called.
+    """
+    canonical = canonical_symbol(symbol)
+    aliases = {
+        "NIFTY50": ("NIFTY 50", "NIFTY", "NIFTY50"),
+        "BANKNIFTY": ("NIFTY BANK", "BANKNIFTY", "NIFTYBANK"),
+        "NIFTYIT": ("NIFTY IT", "NIFTYIT", "CNXIT"),
+    }
+    candidates = aliases.get(canonical)
+    if not candidates:
+        return {"status": "NOT_AVAILABLE", "symbol": canonical,
+                "reason": "Index futures mapping unavailable"}
+
+    try:
+        client = _client()
+        records = []
+        search = getattr(client, "search_scrip", None)
+
+        if callable(search):
+            for candidate in candidates:
+                attempts = [
+                    {"exchange_segment": "nse_fo", "symbol": candidate,
+                     "expiry": "", "option_type": "FUT", "strike_price": ""},
+                    {"exchange_segment": "nse_fo", "symbol": candidate},
+                ]
+                for kwargs in attempts:
+                    try:
+                        found = _extract_search_records(search(**kwargs))
+                        records.extend(found)
+                    except TypeError:
+                        continue
+                    except Exception as exc:
+                        logger.debug("KOTAK index future search failed %s: %s", candidate, exc)
+
+        # Keep only NSE futures and exclude options/equities.
+        filtered = []
+        for record in records:
+            seg = _text(record.get("exchange_segment")).lower()
+            inst = _text(record.get("instrument_type")).upper()
+            tsym = _text(record.get("trading_symbol")).upper()
+            if seg and seg != "nse_fo":
+                continue
+            if "FUT" not in inst and not tsym.endswith("FUT"):
+                continue
+            filtered.append(record)
+
+        # Exact/prefix underlying match first, then nearest expiry.
+        wanted = [re.sub(r"[^A-Z0-9]", "", x.upper()) for x in candidates]
+        def match_score(r):
+            text = re.sub(r"[^A-Z0-9]", "", _text(r.get("trading_symbol")).upper())
+            return 0 if any(text.startswith(w) for w in wanted) else 1
+        filtered.sort(key=lambda r: (match_score(r), _expiry_key(r.get("expiry"))))
+
+        if not filtered:
+            return {"status": "NO DATA", "symbol": canonical,
+                    "reason": "No NSE index future contract found"}
+
+        record = filtered[0]
+        token = _text(record.get("instrument_token"))
+        if not token:
+            return {"status": "NO DATA", "symbol": canonical,
+                    "reason": "Future instrument token unavailable"}
+
+        response = client.quotes(
+            instrument_tokens=[{
+                "instrument_token": token,
+                "exchange_segment": "nse_fo",
+            }],
+            quote_type="all",
+        )
+        quote = _extract_quote(response)
+        if not quote:
+            return {"status": "NO DATA", "symbol": canonical,
+                    "reason": "Future quote unavailable"}
+
+        quote.update({
+            "status": "OK",
+            "symbol": canonical,
+            "source": "kotak_neo",
+            "exchange_segment": "nse_fo",
+            "instrument_token": token,
+            "trading_symbol": record.get("trading_symbol"),
+            "expiry": record.get("expiry"),
+            "instrument_type": record.get("instrument_type") or "FUT",
+        })
+        return quote
+
+    except Exception as exc:
+        logger.warning("KOTAK index future quote failed %s: %s", canonical, exc)
+        return {"status": "ERROR", "symbol": canonical, "reason": str(exc)}
+
+
 def get_current_price(symbol):
     quote = get_quote(symbol)
 
