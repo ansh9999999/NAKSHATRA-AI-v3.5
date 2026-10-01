@@ -20,7 +20,18 @@
     <button class="symbol" data-symbol="SILVER"><b>SILVER</b></button>
     <button class="symbol" data-symbol="CRUDEOIL"><b>CRUDE OIL</b></button>
   </div>
+<div class="equity-search-box" id="equitySearchBox">
+  <div class="equity-search-head"><b>🔎 Search All NSE/BSE Equities</b><small>Kotak Neo ScripMaster</small></div>
+  <input id="equitySearch" type="search" autocomplete="off" placeholder="Search equity: RELIANCE, TCS, INFY, HDFCBANK…">
+  <div id="equityResults" class="equity-results"></div>
+</div>
 </section>
+<style>
+.equity-search-box{margin-top:10px;padding:12px;border:1px solid rgba(0,190,255,.35);border-radius:14px;background:rgba(4,20,38,.72)}
+.equity-search-head{display:flex;justify-content:space-between;gap:10px;align-items:center;margin-bottom:8px}.equity-search-head b{color:#5ed8ff}.equity-search-head small{opacity:.7}
+#equitySearch{width:100%;box-sizing:border-box;border:1px solid rgba(90,180,255,.35);border-radius:10px;background:#06172b;color:#fff;padding:11px 12px;font-size:14px;outline:none}
+.equity-results{display:none;margin-top:7px;max-height:260px;overflow:auto}.equity-result{display:flex;justify-content:space-between;gap:8px;padding:10px;border-top:1px solid rgba(255,255,255,.07);cursor:pointer}.equity-result:hover{background:rgba(40,150,220,.12)}.equity-result b{display:block}.equity-result small{opacity:.7}.equity-exchange{font-size:11px;padding:3px 6px;border-radius:7px;background:#102b42;color:#78dcff;align-self:center}
+</style>
 
 <section class="hero-grid-main">
   <section class="card market-hero">
@@ -81,4 +92,4 @@
 </aside>
 </main>
 <footer><span>NAKSHATRA AI • Indian Market • Kotak Neo</span><span>Auto refresh 10s</span></footer>
-</div><script src="/static/app.js?v=6.5.0"></script></body></html>
+</div><script src="/static/app.js?v=6.7.0"></script></body></html>
