@@ -32,6 +32,7 @@ from analysis.option_chain_engine import analyze_option_chain
 from nse_intelligence import get_nse_intelligence
 from position_shift_engine import ingest as ingest_position_shift, analyze as analyze_position_shift
 from market_shift_engine import detect_market_shift
+from equity_search import search as search_equities, register as register_equity
 
 try:
     from delta import get_ticker as delta_get_ticker
@@ -195,7 +196,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="NAKSHATRA AI",
-    version="5.18",
+    version="5.20",
     lifespan=lifespan,
 )
 
@@ -287,7 +288,7 @@ def health():
 def api():
     return {
         "project": "NAKSHATRA AI",
-        "version": "5.18",
+        "version": "5.20",
         "status": "RUNNING",
         "supported_symbols": symbols(),
         "provider_routing": {
@@ -297,6 +298,27 @@ def api():
         },
         "dashboard_api": "/api/live?symbol=NIFTY50",
     }
+
+
+@app.get("/api/equity-search")
+def api_equity_search(q: str = "", limit: int = 12):
+    try:
+        return _json_safe(search_equities(q, limit=limit))
+    except Exception as exc:
+        logger.exception("EQUITY SEARCH ERROR")
+        return {"status":"ERROR","query":q,"count":0,"results":[],"error":str(exc)}
+
+
+@app.get("/api/equity-register")
+def api_equity_register(symbol: str = ""):
+    try:
+        row = register_equity(symbol)
+        if not row:
+            return {"status":"NOT_FOUND","symbol":symbol}
+        return _json_safe({"status":"OK", **row})
+    except Exception as exc:
+        logger.exception("EQUITY REGISTER ERROR")
+        return {"status":"ERROR","symbol":symbol,"error":str(exc)}
 
 
 @app.get("/api/live")
@@ -384,6 +406,8 @@ def api_live(symbol: str = "BTCUSD", force: bool = False):
 @app.get("/api/options")
 def api_options(symbol: str = "NIFTY50"):
     symbol = canonical_symbol(symbol)
+    if str(symbol).startswith("EQ_"):
+        return {"status":"NOT_AVAILABLE","signal":"NEUTRAL","confidence":0,"reason":"Cash equity selected. Option-chain analysis is available only for supported F&O instruments.","rows":[]}
     ticker = _get_market_quote(symbol) or {}
     spot = ticker.get("ltp") or ticker.get("price") or ticker.get("close")
     try:
@@ -407,6 +431,8 @@ def api_options(symbol: str = "NIFTY50"):
 @app.get("/api/futures")
 def api_futures(symbol: str = "NIFTY50"):
     symbol=canonical_symbol(symbol)
+    if str(symbol).startswith("EQ_"):
+        return {"futures":{"status":"NOT_AVAILABLE","reason":"Cash equity selected; futures contract not selected."},"combined":{"status":"NOT_REQUIRED","view":"CASH EQUITY","action":"TECHNICAL ONLY"}}
     ticker=_get_market_quote(symbol) or {}
     spot=ticker.get("ltp") or ticker.get("price") or ticker.get("close")
     fut=get_futures_intelligence(symbol, spot)
