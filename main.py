@@ -196,7 +196,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="NAKSHATRA AI",
-    version="5.20",
+    version="5.21",
     lifespan=lifespan,
 )
 
@@ -288,7 +288,7 @@ def health():
 def api():
     return {
         "project": "NAKSHATRA AI",
-        "version": "5.20",
+        "version": "5.21",
         "status": "RUNNING",
         "supported_symbols": symbols(),
         "provider_routing": {
