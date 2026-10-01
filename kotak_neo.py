@@ -49,6 +49,14 @@ _CLIENT_LOCK = threading.Lock()
 _TOKEN_CACHE: dict[str, dict[str, Any]] = {}
 _TOKEN_TTL = 6 * 60 * 60
 
+# Historical-data protection: dashboard/scanner calls can overlap. Keep a
+# short per-symbol/timeframe cache and a cooldown after Kotak 429 responses.
+_HISTORY_CACHE: dict[tuple[str, str, int], tuple[float, pd.DataFrame]] = {}
+_HISTORY_LOCK = threading.Lock()
+_HISTORY_429_COOLDOWN: dict[tuple[str, str], float] = {}
+_HISTORY_CACHE_TTL = 90.0
+_HISTORY_429_COOLDOWN_SECONDS = 45.0
+
 
 def _require_sdk():
     if NeoAPI is None:
@@ -594,9 +602,13 @@ def _extract_quote(response):
                 "low": _to_float(value("low")),
                 "close": _to_float(value("close")),
                 "volume": _to_float(
-                    _first(obj, "volume", "last_volume", "volumeTraded", "totalTradedVolume")
+                    _first(
+                        obj,
+                        "volume",
+                        "last_volume",
+                        "volumeTraded",
+                    )
                 ),
-                "oi": _to_float(_first(obj, "oi", "open_interest", "openInterest", "open_int")),
                 "change": _to_float(
                     _first(
                         obj,
@@ -685,104 +697,6 @@ def get_quote(symbol):
 
     return None
 
-
-
-def get_index_future_quote(symbol):
-    """Live near-month index future quote from Kotak Neo with strict underlying matching.
-
-    Safety rule: never substitute another index future.  If an exact underlying
-    contract cannot be identified, return None so the dashboard shows NO DATA.
-    """
-    canonical = canonical_symbol(symbol)
-    base = {"NIFTY50":"NIFTY", "BANKNIFTY":"BANKNIFTY", "NIFTYIT":"NIFTYIT"}.get(canonical)
-    if not base:
-        return None
-
-    client = _client()
-    search = getattr(client, "search_scrip", None)
-    if not callable(search):
-        return None
-
-    records = []
-    for kwargs in (
-        {"exchange_segment":"nse_fo", "symbol":base, "expiry":"", "option_type":"FUT", "strike_price":""},
-        {"exchange_segment":"nse_fo", "symbol":base},
-    ):
-        try:
-            records = _extract_search_records(search(**kwargs))
-            if records:
-                break
-        except TypeError:
-            continue
-        except Exception as exc:
-            logger.warning("KOTAK futures search failed %s: %s", canonical, exc)
-
-    # Known NSE index derivative roots.  Determine the root from the trading
-    # symbol, rather than accepting the first FUTIDX returned by a fuzzy search.
-    # Longest-first prevents NIFTY from matching NIFTYIT/NIFTYNXT50 etc.
-    known_roots = sorted({
-        "BANKNIFTY", "MIDCPNIFTY", "FINNIFTY", "NIFTYNXT50", "NIFTYIT",
-        "NIFTYMID50", "NFTYMCAP50", "NIFTYFPI", "NIFTY"
-    }, key=len, reverse=True)
-
-    def contract_root(record):
-        ts = re.sub(r"[^A-Z0-9]", "", _text(record.get("trading_symbol")).upper())
-        for root in known_roots:
-            if ts.startswith(root):
-                return root
-        return None
-
-    fut = []
-    rejected = []
-    for r in records:
-        it = _text(r.get("instrument_type")).upper()
-        ts = _text(r.get("trading_symbol")).upper()
-        is_future = ("FUT" in it or ts.endswith("FUT") or "FUT" in ts)
-        if not is_future:
-            continue
-        root = contract_root(r)
-        if root == base:
-            fut.append(r)
-        else:
-            rejected.append(ts)
-
-    if not fut:
-        if rejected:
-            logger.warning(
-                "KOTAK FUTURES STRICT MATCH FAILED %s expected=%s rejected=%s",
-                canonical, base, rejected[:5]
-            )
-        return None
-
-    now_utc = datetime.now(timezone.utc)
-    live = [r for r in fut if _expiry_key(r.get("expiry")) >= now_utc.replace(hour=0, minute=0, second=0, microsecond=0)]
-    candidates = live or fut
-    candidates.sort(key=lambda r: _expiry_key(r.get("expiry")))
-    record = candidates[0]
-
-    # Final guard before quote request.
-    if contract_root(record) != base:
-        logger.error("KOTAK FUTURES WRONG CONTRACT BLOCKED %s contract=%s", canonical, record.get("trading_symbol"))
-        return None
-
-    market = {"neo_exchange_segment":"nse_fo"}
-    for token in _quote_candidates(record, market):
-        try:
-            q = _extract_quote(client.quotes(instrument_tokens=[token], quote_type="all"))
-            if q:
-                q.update(
-                    symbol=canonical,
-                    underlying=base,
-                    source="kotak_neo",
-                    contract=record.get("trading_symbol"),
-                    expiry=record.get("expiry"),
-                    instrument_type=record.get("instrument_type"),
-                )
-                logger.info("KOTAK FUTURES OK %s underlying=%s contract=%s", canonical, base, record.get("trading_symbol"))
-                return q
-        except Exception as exc:
-            logger.warning("KOTAK futures quote failed %s: %s", canonical, exc)
-    return None
 
 def get_current_price(symbol):
     quote = get_quote(symbol)
@@ -1126,6 +1040,24 @@ def get_history(
         )
         return empty
 
+    cache_key = (canonical, resolution_key, int(limit))
+    now_ts = time.time()
+    with _HISTORY_LOCK:
+        cached = _HISTORY_CACHE.get(cache_key)
+        if cached and now_ts - cached[0] < _HISTORY_CACHE_TTL and not cached[1].empty:
+            logger.info(
+                "KOTAK HISTORY CACHE HIT %s %s age=%.1fs rows=%s",
+                canonical, resolution_key, now_ts - cached[0], len(cached[1]),
+            )
+            return cached[1].copy()
+        cooldown_until = _HISTORY_429_COOLDOWN.get((canonical, resolution_key), 0.0)
+        if cooldown_until > now_ts:
+            logger.warning(
+                "KOTAK HISTORY 429 COOLDOWN %s %s remaining=%.1fs",
+                canonical, resolution_key, cooldown_until - now_ts,
+            )
+            return empty
+
     max_days = _max_history_days(resolution_key)
     target = max(1, int(limit))
 
@@ -1207,6 +1139,7 @@ def get_history(
                 )
 
         except Exception as exc:
+            message = str(exc)
             logger.warning(
                 "KOTAK history chunk failed %s %s window=%s..%s: %s",
                 canonical,
@@ -1215,6 +1148,11 @@ def get_history(
                 cursor_to.date(),
                 exc,
             )
+            if "429" in message or "Too Many Requests" in message or "Rate limit exceeded" in message:
+                with _HISTORY_LOCK:
+                    _HISTORY_429_COOLDOWN[(canonical, resolution_key)] = time.time() + _HISTORY_429_COOLDOWN_SECONDS
+                # Do not hammer the API with older chunks after a rate limit.
+                break
 
         # Move backward by one small overlap interval to avoid losing a candle
         # at the boundary.  The final merge removes the duplicate.
@@ -1240,6 +1178,9 @@ def get_history(
         len(df),
         calls,
     )
+    with _HISTORY_LOCK:
+        _HISTORY_CACHE[cache_key] = (time.time(), df.copy())
+        _HISTORY_429_COOLDOWN.pop((canonical, resolution_key), None)
 
     return df
 
