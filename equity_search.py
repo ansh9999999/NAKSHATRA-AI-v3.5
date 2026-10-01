@@ -112,6 +112,79 @@ def _parse_url(url: str) -> list[dict[str, Any]]:
     return rows
 
 
+
+def _search_scrip_direct(query: str, limit: int) -> list[dict[str, Any]]:
+    """Fast path: use Kotak Neo's search_scrip API before downloading masters.
+
+    Kotak's current SDK exposes search_scrip(exchange_segment, symbol, ...),
+    which searches the ScripMaster internally. This avoids downloading and
+    parsing the full NSE/BSE universe for every dashboard search.
+    """
+    try:
+        client = _client()
+        search_fn = getattr(client, "search_scrip", None)
+        if not callable(search_fn):
+            return []
+    except Exception as exc:
+        logger.warning("EQUITY SEARCH client unavailable: %s", exc)
+        return []
+
+    out: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    # Search both cash segments. Search results are already instrument records.
+    for segment in ("nse_cm", "bse_cm"):
+        try:
+            response = search_fn(
+                exchange_segment=segment,
+                symbol=query.strip().upper(),
+                expiry="",
+                option_type="",
+                strike_price="",
+            )
+        except TypeError:
+            try:
+                response = search_fn(
+                    exchange_segment=segment,
+                    symbol=query.strip().upper(),
+                )
+            except Exception as exc:
+                logger.warning("EQUITY SEARCH %s search_scrip failed: %s", segment, exc)
+                continue
+        except Exception as exc:
+            logger.warning("EQUITY SEARCH %s search_scrip failed: %s", segment, exc)
+            continue
+
+        for raw in _walk_objects(response):
+            normal = _normalise_record(raw)
+            # Kotak sample equity records use pGroup=EQ and pTrdSymbol=YESBANK-EQ.
+            group = str(_first(raw, "pGroup", "group", "instrument_group") or "").upper()
+            inst = str(normal.get("instrument_type") or "").upper()
+            symbol = str(normal.get("trading_symbol") or "").strip()
+            token = normal.get("instrument_token")
+            exch = str(normal.get("exchange_segment") or segment).lower()
+            if not symbol or token in (None, "", "nan") or exch not in {"nse_cm", "bse_cm"}:
+                continue
+            if group not in {"", "EQ", "EQUITY", "CASH"} and not any(x in inst for x in ("EQ", "EQUITY", "CASH")):
+                continue
+            # Exclude derivatives and non-cash variants.
+            us = symbol.upper()
+            if any(x in us for x in ("-FUT", "-CE", "-PE")):
+                continue
+            key = (exch, us)
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append({
+                "token": str(token),
+                "exchange_segment": exch,
+                "trading_symbol": symbol,
+                "name": str(_first(raw, "pDesc", "pSymbolName", "description", "company_name", "companyName", "name") or symbol).strip(),
+                "instrument_type": inst or group or "EQ",
+            })
+            if len(out) >= max(1, min(int(limit) * 3, 60)):
+                return out
+    return out
+
 def _load_universe(force: bool = False) -> list[dict[str, Any]]:
     global _UNIVERSE, _UNIVERSE_TIME
     now = time.time()
@@ -191,30 +264,34 @@ def _register(row: dict[str, Any]) -> str:
 
 def search(query: str, limit: int = 12) -> dict[str, Any]:
     q = str(query or "").strip()
+    safe_limit = max(1, min(int(limit), 30))
     if len(q) < 2:
         return {"status": "OK", "query": q, "count": 0, "results": [], "note": "Type at least 2 characters."}
-    rows = _load_universe()
+
+    # V2.21 fast path: Kotak search_scrip is the authoritative current lookup.
+    direct = _search_scrip_direct(q, safe_limit)
+    rows = direct if direct else _load_universe()
+
     nq = _norm_text(q)
     q_upper = q.upper()
-    exact = []
-    prefix = []
-    contains = []
+    exact, prefix, contains = [], [], []
     for row in rows:
-        sym = row["trading_symbol"].upper()
-        name = row["name"].upper()
+        sym = str(row.get("trading_symbol") or "").upper()
+        name = str(row.get("name") or "").upper()
         ns = _norm_text(sym)
         nn = _norm_text(name)
-        item = (row, 0)
+        item = row
         if ns == nq or nn == nq:
             exact.append(item)
         elif ns.startswith(nq) or nn.startswith(nq) or sym.startswith(q_upper):
             prefix.append(item)
         elif nq in ns or nq in nn or q_upper in name:
             contains.append(item)
+
     ordered = exact + prefix + contains
     seen = set()
     results = []
-    for row, _ in ordered:
+    for row in ordered:
         key = (row["exchange_segment"], row["trading_symbol"])
         if key in seen:
             continue
@@ -227,10 +304,15 @@ def search(query: str, limit: int = 12) -> dict[str, Any]:
             "exchange": "NSE" if row["exchange_segment"] == "nse_cm" else "BSE",
             "segment": row["exchange_segment"],
         })
-        if len(results) >= max(1, min(int(limit), 30)):
+        if len(results) >= safe_limit:
             break
-    return {"status": "OK", "query": q, "count": len(results), "results": results, "source": "Kotak Neo ScripMaster"}
 
+    source = "Kotak Neo search_scrip" if direct else "Kotak Neo ScripMaster"
+    note = None if results else "No equity match or Kotak search_scrip returned no cash-equity result."
+    payload = {"status": "OK", "query": q, "count": len(results), "results": results, "source": source}
+    if note:
+        payload["note"] = note
+    return payload
 
 def register(symbol: str) -> dict[str, Any] | None:
     for row in _load_universe():
