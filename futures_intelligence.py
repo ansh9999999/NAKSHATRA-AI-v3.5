@@ -2,7 +2,7 @@ from __future__ import annotations
 import threading, time
 from kotak_neo import get_index_future_quote
 
-_LOCK=threading.Lock(); _CACHE={}; _PREV={}; TTL=10
+_LOCK=threading.Lock(); _CACHE={}; _PREV={}; TTL=30
 
 def _n(v):
     try:
@@ -15,8 +15,8 @@ def get_futures_intelligence(symbol, spot=None):
         c=_CACHE.get(symbol)
         if c and now-c[0] < TTL:return c[1]
     q=get_index_future_quote(symbol)
-    if not q:
-        out={"status":"NO DATA","symbol":symbol,"reason":"Near-month futures live quote unavailable; no spot value substituted."}
+    if not q or q.get("status") not in ("OK",):
+        out={"status":q.get("status","NO DATA") if isinstance(q,dict) else "NO DATA","symbol":symbol,"reason":(q or {}).get("reason","Near-month futures live quote unavailable; no spot value substituted.")}
     else:
         price=_n(q.get("price")); oi=_n(q.get("oi")); vol=_n(q.get("volume")); sp=_n(spot)
         with _LOCK: prev=_PREV.get(symbol)
