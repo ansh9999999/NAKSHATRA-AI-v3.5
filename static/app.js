@@ -146,13 +146,13 @@ function render(a){
 
 function renderEquityResults(d){
  const box=$('equityResults'); if(!box)return; const rows=d?.results||[];
- if(!rows.length){box.style.display=d?.query?'block':'none';box.innerHTML=d?.query?'<div class="equity-result"><small>No matching equity found.</small></div>':'';return;}
+ if(d?.status==='ERROR'){box.style.display='block';box.innerHTML='<div class="equity-result"><small>Equity search temporarily unavailable.</small></div>';return;} if(!rows.length){box.style.display=d?.query?'block':'none';box.innerHTML=d?.query?'<div class="equity-result"><small>No matching equity found.</small></div>':'';return;}
  box.style.display='block';
  box.innerHTML=rows.map(x=>`<div class="equity-result" data-symbol="${esc(x.symbol)}" data-name="${esc(x.trading_symbol||x.name||x.symbol)}"><div><b>${esc(x.trading_symbol||'—')}</b><small>${esc(x.name||'')}</small></div><span class="equity-exchange">${esc(x.exchange||'NSE')}</span></div>`).join('');
  box.querySelectorAll('.equity-result[data-symbol]').forEach(el=>el.onclick=()=>{selectSymbol(el.dataset.symbol,el.dataset.name);box.style.display='none';$('equitySearch').value='';});
 }
 async function searchEquities(q){
- try{const r=await fetch(`/api/equity-search?q=${encodeURIComponent(q)}&limit=12&_=${Date.now()}`,{cache:'no-store'});renderEquityResults(await r.json())}
+ try{const r=await fetch(`/api/equity-search?q=${encodeURIComponent(q)}&limit=12`,{cache:'no-store'});renderEquityResults(await r.json())}
  catch(e){const b=$('equityResults');if(b){b.style.display='block';b.innerHTML='<div class="equity-result"><small>Equity search unavailable.</small></div>';}}
 }
 function initEquitySearch(){
