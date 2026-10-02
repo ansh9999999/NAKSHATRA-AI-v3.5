@@ -10,8 +10,10 @@ No order placement is performed by this API.
 """
 
 from contextlib import asynccontextmanager
+from concurrent.futures import ThreadPoolExecutor
 import math
 import time
+import threading
 
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
@@ -45,6 +47,15 @@ _TIMEFRAME_TTL = 60
 _analysis_cache = {}
 _timeframe_cache = {}
 _sentiment_cache = {"time": 0.0, "data": None}
+
+# V2.23: /api/live is a heavy aggregate endpoint. Never make the browser
+# wait for the complete MTF + options + NSE intelligence pipeline. A single
+# background refresh builds the full snapshot while the API returns quickly.
+_live_cache = {}
+_live_jobs = set()
+_live_lock = threading.Lock()
+_live_executor = ThreadPoolExecutor(max_workers=2)
+_LIVE_CACHE_TTL = 20
 
 
 def _json_safe(value):
@@ -321,8 +332,7 @@ def api_equity_register(symbol: str = ""):
         return {"status":"ERROR","symbol":symbol,"error":str(exc)}
 
 
-@app.get("/api/live")
-def api_live(symbol: str = "BTCUSD", force: bool = False):
+def _build_live_payload(symbol: str = "BTCUSD", force: bool = False):
     symbol = canonical_symbol(symbol)
     analysis = run_analysis(symbol, force=force)
     analysis = _enrich_timeframes(symbol, analysis)
@@ -401,6 +411,60 @@ def api_live(symbol: str = "BTCUSD", force: bool = False):
         "market_shift": market_shift,
         "futures_intelligence": futures_payload,
     })
+
+
+def _refresh_live_background(symbol: str):
+    try:
+        payload = _build_live_payload(symbol, force=False)
+        with _live_lock:
+            _live_cache[symbol] = {"time": time.time(), "payload": payload}
+    except Exception as exc:
+        logger.exception("LIVE BACKGROUND REFRESH ERROR %s", symbol)
+        with _live_lock:
+            _live_cache[symbol] = {
+                "time": time.time(),
+                "payload": {
+                    "status": "ERROR",
+                    "symbol": symbol,
+                    "ticker": None,
+                    "analysis": {"status": "ERROR", "message": str(exc)},
+                    "data_quality": {"status": "DATA RISK", "reason": str(exc)},
+                    "server_time": time.time(),
+                },
+            }
+    finally:
+        with _live_lock:
+            _live_jobs.discard(symbol)
+
+
+@app.get("/api/live")
+def api_live(symbol: str = "BTCUSD", force: bool = False):
+    symbol = canonical_symbol(symbol)
+    now = time.time()
+
+    with _live_lock:
+        cached = _live_cache.get(symbol)
+        if cached and now - cached["time"] < _LIVE_CACHE_TTL and not force:
+            return cached["payload"]
+        if symbol not in _live_jobs:
+            _live_jobs.add(symbol)
+            _live_executor.submit(_refresh_live_background, symbol)
+
+    # IMPORTANT: do not call Kotak here. This response must be fast even when
+    # Kotak historical/option endpoints are rate-limited or slow. The browser
+    # polls again and receives the completed snapshot from _live_cache.
+    return {
+        "status": "LOADING",
+        "symbol": symbol,
+        "ticker": None,
+        "analysis": {
+            "status": "LOADING",
+            "symbol": symbol,
+            "message": "Building live market snapshot…",
+        },
+        "data_quality": {"status": "LOADING", "reason": "Live snapshot is being refreshed."},
+        "server_time": now,
+    }
 
 
 @app.get("/api/options")
