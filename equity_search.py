@@ -18,12 +18,14 @@ import requests
 
 from logger import logger
 from market_registry import MARKETS
-from kotak_neo import _client, _normalise_record, _walk_objects, _first, _text, _TOKEN_CACHE
+from kotak_neo import _client, _normalise_record, _walk_objects, _first, _text, _TOKEN_CACHE, _kotak_throttle
 
 _LOCK = threading.Lock()
 _UNIVERSE: list[dict[str, Any]] = []
 _UNIVERSE_TIME = 0.0
 _UNIVERSE_TTL = 6 * 60 * 60
+_SEARCH_CACHE: dict[tuple[str, int], tuple[float, dict[str, Any]]] = {}
+_SEARCH_CACHE_TTL = 30.0
 
 
 def _urls_from_response(response: Any) -> list[str]:
@@ -134,6 +136,7 @@ def _search_scrip_direct(query: str, limit: int) -> list[dict[str, Any]]:
     # Search both cash segments. Search results are already instrument records.
     for segment in ("nse_cm", "bse_cm"):
         try:
+            _kotak_throttle()
             response = search_fn(
                 exchange_segment=segment,
                 symbol=query.strip().upper(),
@@ -265,6 +268,10 @@ def _register(row: dict[str, Any]) -> str:
 def search(query: str, limit: int = 12) -> dict[str, Any]:
     q = str(query or "").strip()
     safe_limit = max(1, min(int(limit), 30))
+    cache_key = (q.upper(), safe_limit)
+    cached = _SEARCH_CACHE.get(cache_key)
+    if cached and time.time() - cached[0] < _SEARCH_CACHE_TTL:
+        return cached[1]
     if len(q) < 2:
         return {"status": "OK", "query": q, "count": 0, "results": [], "note": "Type at least 2 characters."}
 
@@ -312,6 +319,7 @@ def search(query: str, limit: int = 12) -> dict[str, Any]:
     payload = {"status": "OK", "query": q, "count": len(results), "results": results, "source": source}
     if note:
         payload["note"] = note
+    _SEARCH_CACHE[cache_key] = (time.time(), payload)
     return payload
 
 def register(symbol: str) -> dict[str, Any] | None:
