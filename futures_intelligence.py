@@ -43,3 +43,4 @@ def combine_futures_options(fut,opt):
     elif fdir!="NEUTRAL" and odir!="NEUTRAL": view="CONFLICT"; action="WAIT"
     else:view="WAIT FOR CONFIRMATION"; action="WAIT"
     return {"status":"OK" if (fut or {}).get("status")=="OK" and (opt or {}).get("status")=="OK" else "PARTIAL","futures_bias":fdir,"options_bias":odir,"view":view,"action":action}
+    
