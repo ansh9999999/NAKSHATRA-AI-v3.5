@@ -328,3 +328,4 @@ def register(symbol: str) -> dict[str, Any] | None:
             internal = _register(row)
             return {"symbol": internal, **row}
     return None
+        
