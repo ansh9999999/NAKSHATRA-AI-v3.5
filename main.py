@@ -36,6 +36,10 @@ from position_shift_engine import ingest as ingest_position_shift, analyze as an
 from market_shift_engine import detect_market_shift
 from equity_search import search as search_equities, register as register_equity
 
+try:
+    from delta import get_ticker as delta_get_ticker
+except Exception:
+    delta_get_ticker = None
 
 
 CACHE_TTL = 180
@@ -146,27 +150,38 @@ def run_analysis(symbol: str, force=False):
 
 
 def _get_market_quote(symbol):
-    """Indian project routing: every supported Indian instrument uses Kotak Neo.
-    Delta is intentionally NOT a fallback in this project.
-    """
     symbol = canonical_symbol(symbol)
+    market = None
+
     try:
         from market_registry import get_market
         market = get_market(symbol)
     except Exception:
-        market = None
-    if not market or market.get("provider") != "kotak_neo":
-        logger.warning("INDIAN ROUTING BLOCKED non-Kotak symbol=%s", symbol)
-        return None
-    try:
-        quote = get_quote(symbol)
-        if quote:
-            quote["provider"] = "kotak_neo"
-            quote["source"] = "kotak_neo"
-        return quote
-    except Exception as exc:
-        logger.warning("Kotak quote failed %s: %s", symbol, exc)
-        return None
+        pass
+
+    if market and market.get("provider") == "kotak_neo":
+        try:
+            return get_quote(symbol)
+        except Exception as exc:
+            logger.warning(
+                "Kotak quote failed %s: %s",
+                symbol,
+                exc,
+            )
+            return None
+
+    if delta_get_ticker is not None:
+        try:
+            return delta_get_ticker(symbol)
+        except Exception as exc:
+            logger.warning(
+                "Delta quote failed %s: %s",
+                symbol,
+                exc,
+            )
+
+    return None
+
 
 
 def _build_option_buy_plan(symbol, analysis, oc):
@@ -192,7 +207,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="NAKSHATRA AI",
-    version="INDIA-1.0",
+    version="5.22",
     lifespan=lifespan,
 )
 
@@ -284,10 +299,14 @@ def health():
 def api():
     return {
         "project": "NAKSHATRA AI",
-        "version": "INDIA-1.0",
+        "version": "5.22",
         "status": "RUNNING",
-        "supported_symbols": [x for x in symbols() if x not in ("BTCUSD", "ETHUSD")],
-        "provider_routing": {"INDIAN_MARKETS": "kotak_neo"},
+        "supported_symbols": symbols(),
+        "provider_routing": {
+            "BTCUSD": "delta",
+            "ETHUSD": "delta",
+            "INDIAN_MARKETS": "kotak_neo",
+        },
         "dashboard_api": "/api/live?symbol=NIFTY50",
     }
 
@@ -419,35 +438,32 @@ def _refresh_live_background(symbol: str):
 
 
 @app.get("/api/live")
-def api_live(symbol: str = "NIFTY50", force: bool = False):
-    """Fast Indian live endpoint: fetch Kotak LTP first, then refresh analysis in background."""
+def api_live(symbol: str = "BTCUSD", force: bool = False):
     symbol = canonical_symbol(symbol)
     now = time.time()
-    if symbol not in symbols() or symbol in ("BTCUSD", "ETHUSD"):
-        return {"status":"NOT_AVAILABLE","symbol":symbol,"message":"This is the Indian Market project. Use an Indian-market symbol."}
-    ticker = _get_market_quote(symbol)
+
     with _live_lock:
         cached = _live_cache.get(symbol)
-        if cached and now-cached["time"] < _LIVE_CACHE_TTL and not force:
-            payload = cached["payload"]
-            if ticker:
-                payload = dict(payload); payload["ticker"] = ticker; payload["server_time"] = now
-            return payload
+        if cached and now - cached["time"] < _LIVE_CACHE_TTL and not force:
+            return cached["payload"]
         if symbol not in _live_jobs:
             _live_jobs.add(symbol)
             _live_executor.submit(_refresh_live_background, symbol)
-    if ticker:
-        return {
-            "status":"OK", "symbol":symbol, "ticker":ticker,
-            "analysis":{"status":"LOADING","symbol":symbol,"message":"Live Kotak Neo price received; AI snapshot is updating."},
-            "data_quality":{"status":"LIVE","provider":"kotak_neo"},
-            "server_time":now,
-        }
+
+    # IMPORTANT: do not call Kotak here. This response must be fast even when
+    # Kotak historical/option endpoints are rate-limited or slow. The browser
+    # polls again and receives the completed snapshot from _live_cache.
     return {
-        "status":"NO DATA", "symbol":symbol, "ticker":None,
-        "analysis":{"status":"NO DATA","symbol":symbol,"message":"Kotak Neo live quote unavailable. Check credentials/session or Kotak API response."},
-        "data_quality":{"status":"DATA RISK","provider":"kotak_neo"},
-        "server_time":now,
+        "status": "LOADING",
+        "symbol": symbol,
+        "ticker": None,
+        "analysis": {
+            "status": "LOADING",
+            "symbol": symbol,
+            "message": "Building live market snapshot…",
+        },
+        "data_quality": {"status": "LOADING", "reason": "Live snapshot is being refreshed."},
+        "server_time": now,
     }
 
 
@@ -473,4 +489,11 @@ def api_options(symbol: str = "NIFTY50"):
         return _json_safe(payload)
     except Exception as exc:
         logger.exception("OPTION API ERROR %s", symbol)
-        return {"status
+        return {"status":"ERROR","signal":"NEUTRAL","confidence":0,"reason":str(exc),"source":"exception","rows":[]}
+
+
+@app.get("/api/futures")
+def api_futures(symbol: str = "NIFTY50"):
+    symbol=canonical_symbol(symbol)
+    if str(symbol).startswith("EQ_"):
+        return {"futures":{"status":"NOT_AVAILABLE","reason":"Cash equity selected; futures contract not selected."},"combined":{"status":"NOT_REQUIRED","view":"CASH EQUITY","
