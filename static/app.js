@@ -35,6 +35,26 @@ async function loadFutures(){try{renderFutures(await getJson(`/api/futures?symbo
 async function loadNse(){try{renderNse(await getJson(`/api/nse-intelligence?symbol=${encodeURIComponent(symbol)}&_=${Date.now()}`))}catch(e){set('participantStatus','● ERROR')}}
 async function loadShift(){try{renderPositionShift(await getJson(`/api/position-shift?symbol=${encodeURIComponent(symbol)}&_=${Date.now()}`));renderMarketShift(await getJson(`/api/market-shift?symbol=${encodeURIComponent(symbol)}&_=${Date.now()}`))}catch(e){}}
 async function loadCatalysts(){try{const d=await getJson(`/api/catalysts?symbol=${encodeURIComponent(symbol)}&_=${Date.now()}`);set('eventRisk',d.items?.length?'NORMAL':'NO DATA');set('eventDisclaimer',d.note||'Verified catalyst feed only.');$('catalyst').innerHTML=(d.items||[]).slice(0,8).map(x=>`<div class="catalyst-row"><strong>${esc(x.title)}</strong><small>${esc(x.effect||'Confirm with live market data.')}</small></div>`).join('')||'<div class="catalyst-row">No verified catalyst available.</div>'}catch(e){}}
+let equitySearchTimer=null;
+async function searchEquitiesUI(q){
+ const box=$('equityResults'); if(!box)return; q=String(q||'').trim();
+ if(q.length<2){box.style.display='none';box.innerHTML='';return;}
+ box.style.display='block'; box.innerHTML='<div class="equity-result"><small>Searching…</small></div>';
+ try{
+   const d=await getJson(`/api/equity-search?q=${encodeURIComponent(q)}&limit=12&_=${Date.now()}`);
+   const rows=d?.results||[];
+   box.innerHTML=rows.length?rows.map((r,i)=>`<div class="equity-result" data-i="${i}"><span><b>${esc(r.trading_symbol||r.symbol||'—')}</b><small>${esc(r.name||'')}</small></span><span class="equity-exchange">${esc(r.exchange_segment||'')}</span></div>`).join(''):'<div class="equity-result"><small>No matching equity found.</small></div>';
+   box.querySelectorAll('.equity-result[data-i]').forEach(el=>el.addEventListener('click',async()=>{
+      const r=rows[Number(el.dataset.i)]; if(!r)return;
+      try{await getJson(`/api/equity-register?symbol=${encodeURIComponent(r.trading_symbol||r.symbol||'')}&_=${Date.now()}`)}catch(e){}
+      symbol=String(r.symbol||r.trading_symbol||'').toUpperCase(); selectedDisplayName=r.name||r.trading_symbol||symbol;
+      set('marketSymbol',selectedDisplayName); box.style.display='none'; if($('equitySearch'))$('equitySearch').value=''; loadAll();
+   }));
+ }catch(e){box.innerHTML='<div class="equity-result"><small>Search unavailable. Check Kotak Neo connection.</small></div>';}
+}
+
 async function loadAll(){await load();loadOptions();loadFutures();loadNse();loadShift();loadCatalysts()}
-document.addEventListener('DOMContentLoaded',()=>{loadAll();setInterval(load,10000);setInterval(loadOptions,15000);setInterval(loadFutures,20000);setInterval(loadNse,60000)});
+document.addEventListener('DOMContentLoaded',()=>{
+ const es=$('equitySearch'); if(es) es.addEventListener('input',()=>{clearTimeout(equitySearchTimer); equitySearchTimer=setTimeout(()=>searchEquitiesUI(es.value),350)});
+ loadAll();setInterval(load,15000);setInterval(loadOptions,30000);setInterval(loadFutures,30000);setInterval(loadNse,120000)});
  
