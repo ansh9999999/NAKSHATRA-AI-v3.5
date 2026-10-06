@@ -145,4 +145,4 @@ def get_multi_timeframe_history(symbol, limit=DEFAULT_LIMIT):
                 result[tf] = _empty()
 
     return result
-        
+                
