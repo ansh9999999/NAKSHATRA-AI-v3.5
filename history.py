@@ -12,6 +12,8 @@ Public API kept compatible:
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
 import threading
+from datetime import datetime, time as dt_time
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 
@@ -26,20 +28,23 @@ RESOLUTIONS = ("5m", "15m", "1h", "1d", "1w", "1mo")
 # ---------------------------------------------------------------------------
 DEFAULT_LIMIT = 200
 _KOTAK_FETCH_LIMIT = 240
-_CACHE_TTL = 8.0
-_STALE_FALLBACK_SECONDS = 30.0
+_CACHE_TTL = 30.0
+# Keep a usable historical snapshot available between live refreshes.  Kotak
+# historical endpoints are rate-limited, so these TTLs are deliberately much
+# longer than the dashboard polling interval.
+_STALE_FALLBACK_SECONDS = 300.0
 
 # Historical candles for MCX are intentionally not requested through this
 # layer; live MCX quotes are handled by kotak_neo.py.
 MCX_SYMBOLS = {"GOLD", "SILVER", "CRUDEOIL"}
 
 _TIMEFRAME_TTL = {
-    "5m": 8.0,
-    "15m": 15.0,
-    "1h": 30.0,
-    "1d": 60.0,
-    "1w": 120.0,
-    "1mo": 300.0,
+    "5m": 60.0,
+    "15m": 180.0,
+    "1h": 600.0,
+    "1d": 1800.0,
+    "1w": 3600.0,
+    "1mo": 7200.0,
 }
 
 _CACHE = {}
@@ -61,7 +66,20 @@ def _kotak_lock(symbol, timeframe):
     return lock
 
 
+def _market_is_open_now():
+    """Return True during the normal NSE cash/index session (IST)."""
+    try:
+        now = datetime.now(ZoneInfo("Asia/Kolkata"))
+        if now.weekday() >= 5:
+            return False
+        return dt_time(9, 15) <= now.time() <= dt_time(15, 30)
+    except Exception:
+        # If timezone support ever fails, retain the conservative behaviour.
+        return True
+
+
 def _timeframe_max_age_seconds(timeframe):
+    """Normal freshness limits while the market is open."""
     return {
         "5m": 15 * 60,
         "15m": 45 * 60,
@@ -70,6 +88,24 @@ def _timeframe_max_age_seconds(timeframe):
         "1w": 14 * 24 * 60 * 60,
         "1mo": 62 * 24 * 60 * 60,
     }.get(str(timeframe).lower(), 24 * 60 * 60)
+
+
+def _closed_market_max_age_seconds(timeframe):
+    """Allow the last completed NSE session after market close/weekends.
+
+    Historical candles do not advance while the cash/index market is closed.
+    Treating a 3:25 PM candle as 'stale' at 7 PM incorrectly turned the whole
+    technical/MTF engine into UNKNOWN.  These limits are intentionally bounded
+    so genuinely old data is still rejected.
+    """
+    return {
+        "5m": 72 * 60 * 60,
+        "15m": 96 * 60 * 60,
+        "1h": 7 * 24 * 60 * 60,
+        "1d": 14 * 24 * 60 * 60,
+        "1w": 30 * 24 * 60 * 60,
+        "1mo": 90 * 24 * 60 * 60,
+    }.get(str(timeframe).lower(), 72 * 60 * 60)
 
 
 def _last_candle_age_seconds(df):
@@ -90,7 +126,17 @@ def _is_reasonably_fresh(df, timeframe):
     age = _last_candle_age_seconds(df)
     if age is None:
         return False
-    return age <= _timeframe_max_age_seconds(timeframe)
+
+    normal_max = _timeframe_max_age_seconds(timeframe)
+    if age <= normal_max:
+        return True
+
+    # After the NSE session closes there is no new index candle to fetch.
+    # Keep the latest completed session usable instead of forcing UNKNOWN/WAIT.
+    if not _market_is_open_now():
+        return age <= _closed_market_max_age_seconds(timeframe)
+
+    return False
 
 def get_history(symbol="BTCUSD", resolution="5m", limit=200):
     canonical = canonical_symbol(symbol)
@@ -145,9 +191,11 @@ def get_history(symbol="BTCUSD", resolution="5m", limit=200):
 
             if df is not None and not df.empty and _is_reasonably_fresh(df, tf):
                 _CACHE[key] = (time.time(), df.copy())
+                age = _last_candle_age_seconds(df)
+                freshness_note = "market_closed_snapshot" if age is not None and age > _timeframe_max_age_seconds(tf) else "fresh"
                 logger.info(
-                    "HISTORY OK provider=kotak_neo symbol=%s tf=%s rows=%s cached_rows=%s",
-                    canonical, tf, min(len(df), int(limit)), len(df),
+                    "HISTORY OK provider=kotak_neo symbol=%s tf=%s rows=%s cached_rows=%s freshness=%s age=%.1fs",
+                    canonical, tf, min(len(df), int(limit)), len(df), freshness_note, age or 0.0,
                 )
                 return df.tail(int(limit)).copy()
 
