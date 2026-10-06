@@ -20,6 +20,78 @@ from market_registry import canonical_symbol, get_market
 from kotak_neo import get_history as kotak_get_history
 
 RESOLUTIONS = ("5m", "15m", "1h", "1d", "1w", "1mo")
+
+# ---------------------------------------------------------------------------
+# Provider-aware cache/config
+# ---------------------------------------------------------------------------
+DEFAULT_LIMIT = 200
+_KOTAK_FETCH_LIMIT = 240
+_CACHE_TTL = 8.0
+_STALE_FALLBACK_SECONDS = 30.0
+
+# Historical candles for MCX are intentionally not requested through this
+# layer; live MCX quotes are handled by kotak_neo.py.
+MCX_SYMBOLS = {"GOLD", "SILVER", "CRUDEOIL"}
+
+_TIMEFRAME_TTL = {
+    "5m": 8.0,
+    "15m": 15.0,
+    "1h": 30.0,
+    "1d": 60.0,
+    "1w": 120.0,
+    "1mo": 300.0,
+}
+
+_CACHE = {}
+_KOTAK_LOCKS = {}
+
+
+def _empty():
+    return pd.DataFrame(
+        columns=["timestamp", "open", "high", "low", "close", "volume"]
+    )
+
+
+def _kotak_lock(symbol, timeframe):
+    key = (str(symbol).upper(), str(timeframe).lower())
+    lock = _KOTAK_LOCKS.get(key)
+    if lock is None:
+        lock = threading.Lock()
+        _KOTAK_LOCKS[key] = lock
+    return lock
+
+
+def _timeframe_max_age_seconds(timeframe):
+    return {
+        "5m": 15 * 60,
+        "15m": 45 * 60,
+        "1h": 3 * 60 * 60,
+        "1d": 3 * 24 * 60 * 60,
+        "1w": 14 * 24 * 60 * 60,
+        "1mo": 62 * 24 * 60 * 60,
+    }.get(str(timeframe).lower(), 24 * 60 * 60)
+
+
+def _last_candle_age_seconds(df):
+    if df is None or df.empty:
+        return None
+
+    try:
+        ts = df["timestamp"].iloc[-1] if "timestamp" in df.columns else df.index[-1]
+        ts = pd.Timestamp(ts)
+        if ts.tzinfo is None:
+            ts = ts.tz_localize("UTC")
+        return max(0.0, time.time() - ts.timestamp())
+    except Exception:
+        return None
+
+
+def _is_reasonably_fresh(df, timeframe):
+    age = _last_candle_age_seconds(df)
+    if age is None:
+        return False
+    return age <= _timeframe_max_age_seconds(timeframe)
+
 def get_history(symbol="BTCUSD", resolution="5m", limit=200):
     canonical = canonical_symbol(symbol)
     market = get_market(canonical)
