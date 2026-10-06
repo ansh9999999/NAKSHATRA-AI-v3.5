@@ -37,4 +37,4 @@ async function loadShift(){try{renderPositionShift(await getJson(`/api/position-
 async function loadCatalysts(){try{const d=await getJson(`/api/catalysts?symbol=${encodeURIComponent(symbol)}&_=${Date.now()}`);set('eventRisk',d.items?.length?'NORMAL':'NO DATA');set('eventDisclaimer',d.note||'Verified catalyst feed only.');$('catalyst').innerHTML=(d.items||[]).slice(0,8).map(x=>`<div class="catalyst-row"><strong>${esc(x.title)}</strong><small>${esc(x.effect||'Confirm with live market data.')}</small></div>`).join('')||'<div class="catalyst-row">No verified catalyst available.</div>'}catch(e){}}
 async function loadAll(){await load();loadOptions();loadFutures();loadNse();loadShift();loadCatalysts()}
 document.addEventListener('DOMContentLoaded',()=>{loadAll();setInterval(load,10000);setInterval(loadOptions,15000);setInterval(loadFutures,20000);setInterval(loadNse,60000)});
-                                                                                                          
+ 
