@@ -49,48 +49,6 @@ _CLIENT_LOCK = threading.Lock()
 _TOKEN_CACHE: dict[str, dict[str, Any]] = {}
 _TOKEN_TTL = 6 * 60 * 60
 
-# Historical-data protection: dashboard/scanner calls can overlap. Keep a
-# short per-symbol/timeframe cache and a cooldown after Kotak 429 responses.
-_HISTORY_CACHE: dict[tuple[str, str, int], tuple[float, pd.DataFrame]] = {}
-_HISTORY_LOCK = threading.Lock()
-# Only one historical fetch may be in-flight at a time.  The dashboard and
-# scheduler can otherwise request the same symbol/timeframe concurrently and
-# trigger Kotak 429s before the first response is cached.
-_HISTORY_FETCH_LOCK = threading.Lock()
-_HISTORY_429_COOLDOWN: dict[tuple[str, str], float] = {}
-_HISTORY_GLOBAL_COOLDOWN_UNTIL = 0.0
-_HISTORY_CACHE_TTLS = {
-    "5m": 60.0,
-    "15m": 180.0,
-    "1h": 600.0,
-    "1d": 1800.0,
-    "1w": 3600.0,
-}
-_HISTORY_429_COOLDOWN_SECONDS = 45.0
-
-# Conservative client-side pacing. Kotak returns HTTP 429 when too many
-# market-data requests arrive in a short period.
-_KOTAK_CALL_LOCK = threading.Lock()
-_KOTAK_LAST_CALL = 0.0
-_KOTAK_MIN_CALL_GAP = 0.75
-
-def _kotak_throttle():
-    global _KOTAK_LAST_CALL
-    with _KOTAK_CALL_LOCK:
-        now = time.time()
-        wait = _KOTAK_MIN_CALL_GAP - (now - _KOTAK_LAST_CALL)
-        if wait > 0:
-            time.sleep(wait)
-        _KOTAK_LAST_CALL = time.time()
-
-def _is_429(exc: Exception) -> bool:
-    msg = str(exc)
-    return "429" in msg or "Too Many Requests" in msg or "Rate limit exceeded" in msg
-
-def _mark_history_429():
-    global _HISTORY_GLOBAL_COOLDOWN_UNTIL
-    _HISTORY_GLOBAL_COOLDOWN_UNTIL = time.time() + _HISTORY_429_COOLDOWN_SECONDS
-
 
 def _require_sdk():
     if NeoAPI is None:
@@ -687,24 +645,8 @@ def _extract_quote(response):
     )
 
 
-_QUOTE_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
-_QUOTE_CACHE_TTL = 5.0
-_QUOTE_429_COOLDOWN_UNTIL = 0.0
-
 def get_quote(symbol):
-    global _QUOTE_429_COOLDOWN_UNTIL
     canonical = canonical_symbol(symbol)
-    now = time.time()
-    cached_quote = _QUOTE_CACHE.get(canonical)
-    if cached_quote and now - cached_quote[0] < _QUOTE_CACHE_TTL:
-        return dict(cached_quote[1])
-    if _QUOTE_429_COOLDOWN_UNTIL > now:
-        if cached_quote:
-            stale = dict(cached_quote[1])
-            stale["stale"] = True
-            stale["stale_age"] = round(now - cached_quote[0], 1)
-            return stale
-        return None
     market = get_market(canonical)
 
     if (
@@ -726,7 +668,6 @@ def get_quote(symbol):
 
     for token in _quote_candidates(record, market):
         try:
-            _kotak_throttle()
             response = client.quotes(
                 instrument_tokens=[token],
                 quote_type="all",
@@ -737,19 +678,9 @@ def get_quote(symbol):
             if quote:
                 quote["symbol"] = canonical
                 quote["source"] = "kotak_neo"
-                quote["stale"] = False
-                _QUOTE_CACHE[canonical] = (time.time(), dict(quote))
                 return quote
 
         except Exception as exc:
-            if _is_429(exc):
-                _QUOTE_429_COOLDOWN_UNTIL = time.time() + _HISTORY_429_COOLDOWN_SECONDS
-                cached_quote = _QUOTE_CACHE.get(canonical)
-                if cached_quote:
-                    stale = dict(cached_quote[1])
-                    stale["stale"] = True
-                    stale["stale_age"] = round(time.time() - cached_quote[0], 1)
-                    return stale
             logger.warning(
                 "KOTAK quote failed %s: %s",
                 canonical,
@@ -759,27 +690,158 @@ def get_quote(symbol):
     return None
 
 
-_INDEX_FUTURE_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
-_INDEX_FUTURE_CACHE_TTL = 15.0
+def get_current_price(symbol):
+    quote = get_quote(symbol)
 
-def get_index_future_quote(symbol):
-    """Return the nearest NSE index-future quote for NIFTY/BANKNIFTY/NIFTYIT.
+    if not quote:
+        return None
 
-    This is read-only and intentionally returns structured NO DATA/ERROR
-    results instead of substituting the spot index for the future.
+    return quote.get("price")
+
+
+# ==========================================================
+# HISTORICAL DATA
+# ==========================================================
+
+def _interval_for_resolution(resolution):
     """
-    canonical = canonical_symbol(symbol)
-    aliases = {
-        "NIFTY50": ("NIFTY 50", "NIFTY", "NIFTY50"),
-        "BANKNIFTY": ("NIFTY BANK", "BANKNIFTY", "NIFTYBANK"),
-        "NIFTYIT": ("NIFTY IT", "NIFTYIT", "CNXIT"),
-    }
-    candidates = aliases.get(canonical)
-    if not candidates:
-        return {"status": "NOT_REQUIRED", "symbol": canonical}
-    cached_future = _INDEX_FUTURE_CACHE.get(canonical)
-    if cached_future and time.time() - cached_future[0] < _INDEX_FUTURE_CACHE_TTL:
-        return dict(cached_future[1])
+    Current Kotak Neo SDK v3.x intervals:
+    1min, 3min, 5min, 10min, 15min,
+    30min, 60min, D, W
+    """
+    return {
+        "5m": "5min",
+        "15m": "15min",
+        "1h": "60min",
+        "1d": "D",
+        "1w": "W",
+    }.get(
+        str(resolution).lower().strip()
+    )
 
-    try:
-        client = _client
+
+def _max_history_days(resolution):
+    # Backend date ranges are inclusive. Keep one day of headroom so a
+    # nominal 180-day request cannot become 181 calendar dates.
+    return {
+        "5m": 29,
+        "15m": 59,
+        "1h": 89,
+        "1d": 179,
+        "1w": 179,
+    }.get(
+        str(resolution).lower().strip(),
+        29,
+    )
+
+
+def _call_historical(
+    client,
+    segment,
+    token,
+    from_dt,
+    to_dt,
+    resolution,
+):
+    """
+    Kotak Neo SDK v3.x signature:
+
+        client.historical_data(
+            neosymbol,
+            interval,
+            from_date,
+            to_date
+        )
+
+    Example:
+        neosymbol="nse_cm|1333"
+        interval="5min"
+    """
+    fn = getattr(client, "historical_data", None)
+
+    if not callable(fn):
+        raise RuntimeError(
+            "Installed Kotak Neo SDK has no historical_data()."
+        )
+
+    interval = _interval_for_resolution(resolution)
+
+    if not interval:
+        raise RuntimeError(
+            f"Unsupported Kotak historical interval: {resolution}"
+        )
+
+    token_text = _text(token)
+
+    if not token_text:
+        raise RuntimeError(
+            "Kotak instrument token is missing."
+        )
+
+    neosymbol = f"{segment}|{token_text}"
+
+    return fn(
+        neosymbol=neosymbol,
+        interval=interval,
+        from_date=from_dt.strftime("%Y-%m-%d"),
+        to_date=to_dt.strftime("%Y-%m-%d"),
+    )
+
+
+def _extract_candle_rows(response):
+    sequences = []
+
+    if isinstance(response, list):
+        sequences.append(response)
+
+    for obj in _walk_objects(response):
+        for key in (
+            "candles",
+            "data",
+            "result",
+            "historicalData",
+            "historical_data",
+        ):
+            value = obj.get(key)
+
+            if isinstance(value, list):
+                sequences.append(value)
+
+    for sequence in sequences:
+        if not sequence:
+            continue
+
+        first = sequence[0]
+
+        if isinstance(first, dict):
+            rows = []
+
+            for item in sequence:
+                rows.append(
+                    {
+                        "timestamp": _first(
+                            item,
+                            "timestamp",
+                            "time",
+                            "date",
+                            "datetime",
+                            "candle_time",
+                        ),
+                        "open": _first(item, "open", "o"),
+                        "high": _first(item, "high", "h"),
+                        "low": _first(item, "low", "l"),
+                        "close": _first(item, "close", "c"),
+                        "volume": _first(item, "volume", "v"),
+                    }
+                )
+
+            return rows
+
+        if (
+            isinstance(first, (list, tuple))
+            and len(first) >= 5
+        ):
+            return [
+                {
+                    "timestamp": row[0],
+ 
