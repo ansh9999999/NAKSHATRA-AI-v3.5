@@ -54,8 +54,8 @@ _sentiment_cache = {"time": 0.0, "data": None}
 _live_cache = {}
 _live_jobs = set()
 _live_lock = threading.Lock()
-_live_executor = ThreadPoolExecutor(max_workers=2)
-_LIVE_CACHE_TTL = 20
+_live_executor = ThreadPoolExecutor(max_workers=1)
+_LIVE_CACHE_TTL = 60
 
 
 def _json_safe(value):
@@ -330,6 +330,41 @@ def api_equity_register(symbol: str = ""):
     except Exception as exc:
         logger.exception("EQUITY REGISTER ERROR")
         return {"status":"ERROR","symbol":symbol,"error":str(exc)}
+
+@app.get("/api/nse-intelligence")
+def api_nse_intelligence(symbol: str = "NIFTY50"):
+    try:
+        return _json_safe(get_nse_intelligence(canonical_symbol(symbol)))
+    except Exception as exc:
+        logger.exception("NSE INTELLIGENCE ERROR")
+        return {"status":"ERROR","symbol":symbol,"error":str(exc)}
+
+
+@app.get("/api/position-shift")
+def api_position_shift(symbol: str = "NIFTY50"):
+    try:
+        return _json_safe(analyze_position_shift(canonical_symbol(symbol)))
+    except Exception as exc:
+        logger.exception("POSITION SHIFT ERROR")
+        return {"status":"ERROR","symbol":symbol,"bias":"WAIT","strength":0,"error":str(exc)}
+
+
+@app.get("/api/market-shift")
+def api_market_shift(symbol: str = "NIFTY50"):
+    try:
+        return _json_safe(detect_market_shift(canonical_symbol(symbol)))
+    except Exception as exc:
+        logger.exception("MARKET SHIFT ERROR")
+        return {"status":"ERROR","symbol":symbol,"bias":"WAIT","strength":0,"error":str(exc)}
+
+
+@app.get("/api/catalysts")
+def api_catalysts(symbol: str = "NIFTY50"):
+    try:
+        return _json_safe(get_market_catalysts(canonical_symbol(symbol)))
+    except Exception as exc:
+        logger.exception("CATALYSTS ERROR")
+        return {"status":"ERROR","symbol":symbol,"items":[],"error":str(exc)}
 
 
 def _build_live_payload(symbol: str = "BTCUSD", force: bool = False):
