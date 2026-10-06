@@ -1113,6 +1113,7 @@ def get_history(
                 )
 
         except Exception as exc:
+            error_text = str(exc)
             logger.warning(
                 "KOTAK history chunk failed %s %s window=%s..%s: %s",
                 canonical,
@@ -1121,6 +1122,18 @@ def get_history(
                 cursor_to.date(),
                 exc,
             )
+
+            # A 429 means Kotak is actively rate-limiting us. Do not walk
+            # backwards through every historical chunk immediately; that only
+            # creates another burst of 429s. Leave the cache intact and let the
+            # next scheduled refresh retry after the history-layer TTL.
+            if "429" in error_text or "rate limit" in error_text.lower() or "too many request" in error_text.lower():
+                logger.warning(
+                    "KOTAK HISTORY RATE LIMITED %s %s; stopping remaining chunks",
+                    canonical,
+                    resolution_key,
+                )
+                break
 
         # Move backward by one small overlap interval to avoid losing a candle
         # at the boundary.  The final merge removes the duplicate.
