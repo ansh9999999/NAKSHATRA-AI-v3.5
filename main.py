@@ -496,4 +496,4 @@ def api_options(symbol: str = "NIFTY50"):
 def api_futures(symbol: str = "NIFTY50"):
     symbol=canonical_symbol(symbol)
     if str(symbol).startswith("EQ_"):
-        return {"futures":{"status":"NOT_AVAILABLE","reason":"Cash equity selected; futures contract not selected."},"combined":{"status":"NOT_REQUIRED","view":"CASH EQUITY","
+        return {"futures":{"status":"NOT_AVAILABLE","reason":"Cash equity selected; futures contract not selected."},"combined":{"status":"NOT_REQUIRED","view":"CASH EQUITY","action":"TECHNICAL ONLY"}}
