@@ -49,21 +49,6 @@ _TIMEFRAME_TTL = {
 
 _CACHE = {}
 _KOTAK_LOCKS = {}
-_MAX_HISTORY_CACHE = 40
-_MAX_KOTAK_LOCKS = 80
-
-def _cache_put(key, value):
-    _CACHE[key] = value
-    while len(_CACHE) > _MAX_HISTORY_CACHE:
-        oldest = min(_CACHE, key=lambda k: _CACHE[k][0])
-        _CACHE.pop(oldest, None)
-
-def _get_lock(key):
-    lock = _KOTAK_LOCKS.get(key)
-    if lock is None:
-        lock = threading.Lock()
-        _KOTAK_LOCKS[key] = lock
-    return lock
 
 
 def _empty():
@@ -74,7 +59,11 @@ def _empty():
 
 def _kotak_lock(symbol, timeframe):
     key = (str(symbol).upper(), str(timeframe).lower())
-    return _get_lock(key)
+    lock = _KOTAK_LOCKS.get(key)
+    if lock is None:
+        lock = threading.Lock()
+        _KOTAK_LOCKS[key] = lock
+    return lock
 
 
 def _market_is_open_now():
@@ -201,7 +190,7 @@ def get_history(symbol="BTCUSD", resolution="5m", limit=200):
             df = kotak_get_history(canonical, tf, fetch_limit)
 
             if df is not None and not df.empty and _is_reasonably_fresh(df, tf):
-                _cache_put(key, (time.time(), df.copy()))
+                _CACHE[key] = (time.time(), df.copy())
                 age = _last_candle_age_seconds(df)
                 freshness_note = "market_closed_snapshot" if age is not None and age > _timeframe_max_age_seconds(tf) else "fresh"
                 logger.info(
