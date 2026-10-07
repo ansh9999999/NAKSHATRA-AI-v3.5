@@ -28,6 +28,8 @@ _SEARCH_CACHE: dict[tuple[str, int], tuple[float, dict[str, Any]]] = {}
 _SEARCH_CACHE_TTL = 30.0
 _REGISTER_CACHE: dict[str, str] = {}
 _REGISTER_LOCK = threading.Lock()
+_MAX_SEARCH_CACHE = 80
+_MAX_REGISTER_CACHE = 500
 
 
 def _urls_from_response(response: Any) -> list[str]:
@@ -271,6 +273,10 @@ def _register(row: dict[str, Any]) -> str:
         MARKETS[internal] = market
         _TOKEN_CACHE[internal] = {"time": time.time(), "record": market["instrument_record"]}
         _REGISTER_CACHE[cache_key] = internal
+        if len(_REGISTER_CACHE) > _MAX_REGISTER_CACHE:
+            # Keep the most recent registrations; dictionary insertion order is stable.
+            for k in list(_REGISTER_CACHE)[:len(_REGISTER_CACHE)-_MAX_REGISTER_CACHE]:
+                _REGISTER_CACHE.pop(k, None)
     return internal
 
 
@@ -312,13 +318,16 @@ def search(query: str, limit: int = 12) -> dict[str, Any]:
         if key in seen:
             continue
         seen.add(key)
-        internal = _register(row)
+        # Do NOT dynamically register every search result. Register only the
+        # instrument the user actually clicks. This prevents typing a query
+        # from growing MARKETS/_TOKEN_CACHE with dozens of instruments.
         results.append({
-            "symbol": internal,
+            "symbol": row["trading_symbol"],
             "trading_symbol": row["trading_symbol"],
             "name": row["name"],
             "exchange": "NSE" if row["exchange_segment"] == "nse_cm" else "BSE",
             "segment": row["exchange_segment"],
+            "token": row.get("token"),
         })
         if len(results) >= safe_limit:
             break
@@ -329,6 +338,11 @@ def search(query: str, limit: int = 12) -> dict[str, Any]:
     if note:
         payload["note"] = note
     _SEARCH_CACHE[cache_key] = (time.time(), payload)
+    # Bound the in-memory query cache on the Render 512 MB instance.
+    if len(_SEARCH_CACHE) > _MAX_SEARCH_CACHE:
+        oldest = sorted(_SEARCH_CACHE.items(), key=lambda kv: kv[1][0])[:len(_SEARCH_CACHE)-_MAX_SEARCH_CACHE]
+        for k, _ in oldest:
+            _SEARCH_CACHE.pop(k, None)
     return payload
 
 def register(symbol: str) -> dict[str, Any] | None:
@@ -347,28 +361,6 @@ def register(symbol: str) -> dict[str, Any] | None:
             "name": str(market.get("name") or market.get("display") or ""),
             "instrument_type": str(market.get("instrument_record", {}).get("instrument_type") or "EQ"),
         }
-
-    # Browser tabs can survive a Render restart. In that case an old EQ_*
-    # symbol may no longer exist in this process' in-memory registry. Rebuild
-    # the stable instrument identity from EQ_<segment>_<trading>_<token>.
-    # This avoids sending the dynamic equity into the Delta crypto fallback.
-    if value.startswith("EQ_") and value not in MARKETS:
-        parts = value.split("_")
-        if len(parts) >= 4:
-            seg = parts[1].lower() + "_" + parts[2].lower()
-            token = parts[-1]
-            trading = "_".join(parts[3:-1])
-            if seg in {"nse_cm", "bse_cm"} and token.isdigit() and trading:
-                trading = trading.upper()
-                row = {
-                    "token": token,
-                    "exchange_segment": seg,
-                    "trading_symbol": trading,
-                    "name": trading,
-                    "instrument_type": "EQ",
-                }
-                internal = _register(row)
-                return {"symbol": internal, **row}
 
     # Fast exact lookup from the already loaded universe.
     for row in _UNIVERSE:
