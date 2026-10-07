@@ -48,6 +48,7 @@ _TIMEFRAME_TTL = {
 }
 
 _CACHE = {}
+_MAX_HISTORY_CACHE = 40
 _KOTAK_LOCKS = {}
 
 
@@ -191,6 +192,9 @@ def get_history(symbol="BTCUSD", resolution="5m", limit=200):
 
             if df is not None and not df.empty and _is_reasonably_fresh(df, tf):
                 _CACHE[key] = (time.time(), df.copy())
+                if len(_CACHE) > _MAX_HISTORY_CACHE:
+                    oldest = min(_CACHE.items(), key=lambda kv: kv[1][0])[0]
+                    if oldest != key: _CACHE.pop(oldest, None)
                 age = _last_candle_age_seconds(df)
                 freshness_note = "market_closed_snapshot" if age is not None and age > _timeframe_max_age_seconds(tf) else "fresh"
                 logger.info(
