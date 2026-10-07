@@ -7,6 +7,8 @@ import os
 
 from apscheduler.schedulers.background import BackgroundScheduler
 
+from scanner import market_scan
+from monitor.trade_monitor import monitor_open_trades
 
 from logger import logger
 
@@ -27,10 +29,6 @@ def start_scheduler():
     if scheduler.running:
         logger.info("Scheduler already running")
         return
-
-    # Lazy-import heavy modules only when scheduler is explicitly enabled.
-    from scanner import market_scan
-    from monitor.trade_monitor import monitor_open_trades
 
     # Run market scanner every 5 minutes
     scheduler.add_job(
