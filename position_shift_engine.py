@@ -3,7 +3,7 @@ from collections import defaultdict, deque
 from threading import Lock
 import time, math
 
-_LOCK=Lock(); _H=defaultdict(lambda: deque(maxlen=180)); MIN_SNAPSHOT_SECONDS=10
+_LOCK=Lock(); _H=defaultdict(lambda: deque(maxlen=90)); MIN_SNAPSHOT_SECONDS=10
 
 def _n(v):
     try:
@@ -31,7 +31,16 @@ def ingest(symbol, spot, chain):
     if not isinstance(chain,dict) or chain.get('status')!='OK': return
     rows=_rows(chain)
     if not rows:return
-    now=time.time(); snap={'t':now,'spot':_n(spot),'expiry':chain.get('expiry'),'rows':rows}
+    now=time.time()
+    # Keep only a compact ATM neighbourhood. The full chain is already cached
+    # by option_chain_engine; duplicating 200+ rows every 10 seconds wastes RAM.
+    snap_rows=rows
+    atm=_n(spot)
+    if atm is not None and rows:
+        strikes=sorted({k[0] for k in rows})
+        near=set(sorted(strikes,key=lambda x:abs(x-atm))[:24])
+        snap_rows={k:v for k,v in rows.items() if k[0] in near}
+    snap={'t':now,'spot':atm,'expiry':chain.get('expiry'),'rows':snap_rows}
     with _LOCK:
         h=_H[symbol]
         if h and now-h[-1]['t'] < MIN_SNAPSHOT_SECONDS:return
