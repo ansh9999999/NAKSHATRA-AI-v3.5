@@ -14,7 +14,6 @@ from concurrent.futures import ThreadPoolExecutor
 import math
 import time
 import threading
-from collections import OrderedDict
 
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
@@ -57,10 +56,21 @@ _live_jobs = set()
 _live_lock = threading.Lock()
 _live_executor = ThreadPoolExecutor(max_workers=1)
 _LIVE_CACHE_TTL = 60
-_QUOTE_CACHE_TTL = 3
-_QUOTE_CACHE_MAX = 32
-_quote_cache = OrderedDict()
-_quote_lock = threading.Lock()
+_MAX_ANALYSIS_CACHE = 24
+_MAX_TIMEFRAME_CACHE = 24
+_MAX_LIVE_CACHE = 24
+
+def _cache_put(cache, key, value, max_items):
+    cache[key] = value
+    while len(cache) > max_items:
+        try:
+            oldest = min(cache.items(), key=lambda kv: kv[1].get("time", 0) if isinstance(kv[1], dict) else 0)[0]
+        except Exception:
+            oldest = next(iter(cache))
+        if oldest == key and len(cache) > 1:
+            oldest = next(iter(k for k in cache if k != key))
+        cache.pop(oldest, None)
+
 
 
 def _json_safe(value):
@@ -115,10 +125,7 @@ def run_analysis(symbol: str, force=False):
                 ),
                 "server_time": time.time(),
             }
-            _analysis_cache[symbol] = {
-                "time": time.time(),
-                "result": result,
-            }
+            _cache_put(_analysis_cache, symbol, {"time": time.time(), "result": result}, _MAX_ANALYSIS_CACHE)
             return result
 
         data["symbol"] = symbol
@@ -131,10 +138,7 @@ def run_analysis(symbol: str, force=False):
                 (time.time() - started) * 1000
             )
 
-        _analysis_cache[symbol] = {
-            "time": time.time(),
-            "result": result,
-        }
+        _cache_put(_analysis_cache, symbol, {"time": time.time(), "result": result}, _MAX_ANALYSIS_CACHE)
         return result
 
     except Exception as exc:
@@ -147,10 +151,7 @@ def run_analysis(symbol: str, force=False):
                 (time.time() - started) * 1000
             ),
         }
-        _analysis_cache[symbol] = {
-            "time": time.time(),
-            "result": result,
-        }
+        _cache_put(_analysis_cache, symbol, {"time": time.time(), "result": result}, _MAX_ANALYSIS_CACHE)
         return result
 
 
@@ -174,11 +175,6 @@ def _get_market_quote(symbol):
                 exc,
             )
             return None
-
-    # Dynamic NSE/BSE equities must never fall through to Delta.  Delta only
-    # supports the explicitly configured crypto symbols.
-    if str(symbol).startswith("EQ_"):
-        return None
 
     if delta_get_ticker is not None:
         try:
@@ -254,7 +250,7 @@ def _enrich_timeframes(symbol,analysis):
             x=data["1d"].copy().reset_index(drop=True); x["grp"]=x.index//5
             w=x.groupby("grp").agg({"close":"last"}); d["1w"]=_trend_from_close(w)
             d["1w"]["source"]="derived from 1D candles (5 trading sessions)"
-        _timeframe_cache[symbol]={"time":now,"data":d}
+        _cache_put(_timeframe_cache, symbol, {"time":now,"data":d}, _MAX_TIMEFRAME_CACHE)
         analysis["derived_timeframes"]=d
     except Exception as e:
         analysis["derived_timeframes_error"]=str(e)
@@ -341,6 +337,73 @@ def api_equity_register(symbol: str = ""):
         logger.exception("EQUITY REGISTER ERROR")
         return {"status":"ERROR","symbol":symbol,"error":str(exc)}
 
+@app.get("/api/quote")
+def api_quote(symbol: str = "NIFTY50"):
+    """Fast quote-only endpoint. Never runs historical/AI analysis."""
+    raw = str(symbol or "NIFTY50").strip().upper()
+    try:
+        canonical = canonical_symbol(raw)
+        quote = _get_market_quote(canonical)
+        if quote:
+            return _json_safe({"status":"OK", "symbol":canonical, "ticker":quote, "server_time":time.time()})
+        return {"status":"NO DATA", "symbol":canonical, "ticker":None, "server_time":time.time()}
+    except Exception as exc:
+        logger.warning("FAST QUOTE ERROR %s: %s", raw, exc)
+        return {"status":"ERROR", "symbol":raw, "ticker":None, "error":str(exc), "server_time":time.time()}
+
+
+@app.get("/api/futures")
+def api_futures(symbol: str = "NIFTY50"):
+    symbol = canonical_symbol(symbol)
+    if str(symbol).startswith("EQ_"):
+        return {"futures":{"status":"NOT_AVAILABLE","symbol":symbol,"reason":"Cash equity selected; futures contract not selected."},"combined":{"status":"NOT_REQUIRED","view":"CASH EQUITY","action":"TECHNICAL ONLY"}}
+    if symbol not in ("NIFTY50", "BANKNIFTY", "NIFTYIT"):
+        return {"futures":{"status":"NOT_REQUIRED","symbol":symbol,"reason":"Index futures intelligence is enabled for NIFTY/BANKNIFTY/NIFTY IT."},"combined":{"status":"NOT_REQUIRED","view":"NOT REQUIRED","action":"WAIT"}}
+    try:
+        ticker = _get_market_quote(symbol) or {}
+        spot = ticker.get("ltp") or ticker.get("price") or ticker.get("close")
+        fut = get_futures_intelligence(symbol, spot)
+        # Options are deliberately read from the existing cache/engine here; this
+        # endpoint must not invoke the full AI analysis pipeline.
+        opt = {"status":"NO DATA","signal":"NEUTRAL"}
+        if symbol in ("NIFTY50", "BANKNIFTY"):
+            opt = analyze_option_chain(symbol, spot_price=spot)
+        combined = combine_futures_options(fut, opt)
+        return _json_safe({"status":"OK" if fut.get("status") in ("OK","NO_DATA","NOT_REQUIRED") else fut.get("status"),"symbol":symbol,"futures":fut,"combined":combined})
+    except Exception as exc:
+        logger.exception("FUTURES API ERROR %s", symbol)
+        return {"status":"ERROR","symbol":symbol,"futures":{"status":"ERROR","reason":str(exc)},"combined":{"status":"DATA RISK","view":"WAIT","action":"WAIT"}}
+
+
+@app.get("/api/scanner")
+def api_scanner():
+    """Lightweight live scanner based on fast quotes only.
+
+    It intentionally does not call market_scan()/generate_signal() for every
+    symbol, because that would multiply historical/option requests and can
+    push a 512 MB Render instance into OOM.
+    """
+    now = time.time()
+    key = "__scanner__"
+    cached = _live_cache.get(key)
+    if cached and now - cached.get("time", 0) < 15:
+        return cached["payload"]
+
+    scan_symbols = ["NIFTY50", "BANKNIFTY", "SENSEX", "NIFTYIT", "GOLD", "SILVER", "CRUDEOIL"]
+    rows = []
+    for sym in scan_symbols:
+        try:
+            q = _get_market_quote(sym) or {}
+            px = q.get("ltp") or q.get("price") or q.get("close")
+            ch = q.get("percent_change")
+            rows.append({"symbol":sym,"price":px,"change_pct":ch,"status":"OK" if px is not None else "NO DATA"})
+        except Exception as exc:
+            rows.append({"symbol":sym,"price":None,"change_pct":None,"status":"ERROR","error":str(exc)})
+    payload = {"status":"OK","rows":rows,"server_time":now,"note":"Fast quote scanner; AI analysis loads separately for the selected market."}
+    _cache_put(_live_cache, key, {"time":now,"payload":payload}, _MAX_LIVE_CACHE)
+    return _json_safe(payload)
+
+
 @app.get("/api/nse-intelligence")
 def api_nse_intelligence(symbol: str = "NIFTY50"):
     try:
@@ -353,7 +416,10 @@ def api_nse_intelligence(symbol: str = "NIFTY50"):
 @app.get("/api/position-shift")
 def api_position_shift(symbol: str = "NIFTY50"):
     try:
-        return _json_safe(analyze_position_shift(canonical_symbol(symbol)))
+        canonical = canonical_symbol(symbol)
+        if str(canonical).startswith("EQ_") or canonical not in ("NIFTY50","BANKNIFTY"):
+            return {"status":"NOT_REQUIRED","symbol":canonical,"bias":"WAIT","strength":0,"action":"WAIT","note":"Live option position shift is enabled for NIFTY/BANKNIFTY."}
+        return _json_safe(analyze_position_shift(canonical))
     except Exception as exc:
         logger.exception("POSITION SHIFT ERROR")
         return {"status":"ERROR","symbol":symbol,"bias":"WAIT","strength":0,"error":str(exc)}
@@ -362,7 +428,8 @@ def api_position_shift(symbol: str = "NIFTY50"):
 @app.get("/api/market-shift")
 def api_market_shift(symbol: str = "NIFTY50"):
     try:
-        return _json_safe(detect_market_shift(canonical_symbol(symbol)))
+        canonical = canonical_symbol(symbol)
+        return _json_safe(detect_market_shift(canonical))
     except Exception as exc:
         logger.exception("MARKET SHIFT ERROR")
         return {"status":"ERROR","symbol":symbol,"bias":"WAIT","strength":0,"error":str(exc)}
@@ -382,16 +449,27 @@ def _build_live_payload(symbol: str = "BTCUSD", force: bool = False):
     analysis = run_analysis(symbol, force=force)
     analysis = _enrich_timeframes(symbol, analysis)
     ticker = _get_market_quote(symbol)
-    market_shift = detect_market_shift(symbol)
 
-    # v2.10 data-quality gate for index decisions. A strong directional call
-    # is not allowed when the option chain or positioning sentiment is absent.
-    quality = {"status": "NOT_REQUIRED"}
+    # Keep expensive shift/position modules out of the fast equity path.
+    if str(symbol).startswith("EQ_"):
+        market_shift = {"status":"NOT_REQUIRED","symbol":symbol,"bias":"WAIT","strength":0,"phase":"CASH EQUITY","action":"TECHNICAL ONLY","note":"Market-shift/options positioning is reserved for index derivatives."}
+    else:
+        market_shift = detect_market_shift(symbol)
+
+    quality = {"status":"NOT_REQUIRED"}
     oc = None
+    if isinstance(analysis, dict):
+        # generate_signal() already calculated the option chain. Reuse it instead
+        # of hitting NSE/Kotak a second time in the same live refresh.
+        existing_oc = analysis.get("option_chain")
+        if isinstance(existing_oc, dict):
+            oc = existing_oc
+
     if symbol in ("NIFTY50", "BANKNIFTY") and isinstance(analysis, dict):
         try:
             spot = (ticker or {}).get("ltp") or (ticker or {}).get("price") or (ticker or {}).get("close")
-            oc = analyze_option_chain(symbol, spot_price=spot)
+            if not isinstance(oc, dict) or oc.get("status") != "OK":
+                oc = analyze_option_chain(symbol, spot_price=spot)
             ingest_position_shift(symbol, spot, oc)
             intel = get_nse_intelligence(symbol)
             sent = (intel or {}).get("sentiment", {})
@@ -417,12 +495,17 @@ def _build_live_payload(symbol: str = "BTCUSD", force: bool = False):
             analysis["recommendation"] = "WAIT"
             analysis["signal"] = "WAIT"
             analysis["data_quality"] = quality
+    elif isinstance(analysis, dict):
+        # Public sentiment is useful for cash equities too; do not leave the UI
+        # blank simply because there is no option chain.
+        analysis["sentiment"] = _public_sentiment()
 
-    shift = analyze_position_shift(symbol) if symbol in ("NIFTY50","BANKNIFTY") else {"status":"NOT_REQUIRED"}
-    futures_payload = {"futures":{"status":"NOT_REQUIRED"},"combined":{"status":"NOT_REQUIRED"}}
+    shift = analyze_position_shift(symbol) if symbol in ("NIFTY50","BANKNIFTY") else {"status":"NOT_REQUIRED","symbol":symbol,"bias":"WAIT","strength":0,"action":"WAIT"}
+    futures_payload = {"futures":{"status":"NOT_REQUIRED","symbol":symbol},"combined":{"status":"NOT_REQUIRED","view":"NOT REQUIRED","action":"WAIT"}}
     if symbol in ("NIFTY50","BANKNIFTY","NIFTYIT"):
         try:
-            fut = get_futures_intelligence(symbol, (ticker or {}).get("ltp") or (ticker or {}).get("price") or (ticker or {}).get("close"))
+            spot = (ticker or {}).get("ltp") or (ticker or {}).get("price") or (ticker or {}).get("close")
+            fut = get_futures_intelligence(symbol, spot)
             futures_payload = {"futures": fut, "combined": combine_futures_options(fut, oc or {"status":"NO DATA"})}
         except Exception as exc:
             futures_payload = {"futures":{"status":"ERROR","reason":str(exc)},"combined":{"status":"DATA RISK","view":"WAIT","action":"WAIT"}}
@@ -441,11 +524,7 @@ def _build_live_payload(symbol: str = "BTCUSD", force: bool = False):
         analysis["market_shift"] = market_shift
 
     return _json_safe({
-        "status": (
-            analysis.get("status", "UNKNOWN")
-            if isinstance(analysis, dict)
-            else "UNKNOWN"
-        ),
+        "status": analysis.get("status", "UNKNOWN") if isinstance(analysis, dict) else "UNKNOWN",
         "symbol": symbol,
         "ticker": ticker,
         "analysis": analysis,
@@ -462,62 +541,20 @@ def _refresh_live_background(symbol: str):
     try:
         payload = _build_live_payload(symbol, force=False)
         with _live_lock:
-            _live_cache[symbol] = {"time": time.time(), "payload": payload}
+            _cache_put(_live_cache, symbol, {"time": time.time(), "payload": payload}, _MAX_LIVE_CACHE)
     except Exception as exc:
         logger.exception("LIVE BACKGROUND REFRESH ERROR %s", symbol)
         with _live_lock:
-            _live_cache[symbol] = {
-                "time": time.time(),
-                "payload": {
-                    "status": "ERROR",
-                    "symbol": symbol,
-                    "ticker": None,
-                    "analysis": {"status": "ERROR", "message": str(exc)},
-                    "data_quality": {"status": "DATA RISK", "reason": str(exc)},
-                    "server_time": time.time(),
-                },
-            }
+            _cache_put(_live_cache, symbol, {"time": time.time(), "payload": {"status":"ERROR","symbol":symbol,"ticker":None,"analysis":{"status":"ERROR","message":str(exc)},"data_quality":{"status":"DATA RISK","reason":str(exc)},"server_time":time.time()}}, _MAX_LIVE_CACHE)
     finally:
         with _live_lock:
             _live_jobs.discard(symbol)
-
-
-@app.get("/api/quote")
-def api_quote(symbol: str = "NIFTY50"):
-    """Fast quote-only endpoint used when switching markets.
-
-    The dashboard should not wait for the full technical/options/NSE pipeline
-    just to show the newly selected instrument's current price.
-    """
-    canonical = canonical_symbol(symbol)
-    now = time.time()
-    with _quote_lock:
-        cached = _quote_cache.get(canonical)
-        if cached and now - cached[0] < _QUOTE_CACHE_TTL:
-            _quote_cache.move_to_end(canonical)
-            return cached[1]
-
-    quote = _get_market_quote(canonical)
-    payload = {
-        "status": "OK" if quote else "NO DATA",
-        "symbol": canonical,
-        "ticker": quote,
-        "server_time": now,
-    }
-    if quote:
-        with _quote_lock:
-            _quote_cache[canonical] = (time.time(), payload)
-            _quote_cache.move_to_end(canonical)
-            while len(_quote_cache) > _QUOTE_CACHE_MAX:
-                _quote_cache.popitem(last=False)
-    return _json_safe(payload)
 
 
 @app.get("/api/live")
 def api_live(symbol: str = "BTCUSD", force: bool = False):
     symbol = canonical_symbol(symbol)
     now = time.time()
-
     with _live_lock:
         cached = _live_cache.get(symbol)
         if cached and now - cached["time"] < _LIVE_CACHE_TTL and not force:
@@ -525,22 +562,7 @@ def api_live(symbol: str = "BTCUSD", force: bool = False):
         if symbol not in _live_jobs:
             _live_jobs.add(symbol)
             _live_executor.submit(_refresh_live_background, symbol)
-
-    # IMPORTANT: do not call Kotak here. This response must be fast even when
-    # Kotak historical/option endpoints are rate-limited or slow. The browser
-    # polls again and receives the completed snapshot from _live_cache.
-    return {
-        "status": "LOADING",
-        "symbol": symbol,
-        "ticker": None,
-        "analysis": {
-            "status": "LOADING",
-            "symbol": symbol,
-            "message": "Building live market snapshot…",
-        },
-        "data_quality": {"status": "LOADING", "reason": "Live snapshot is being refreshed."},
-        "server_time": now,
-    }
+    return {"status":"LOADING","symbol":symbol,"ticker":None,"analysis":{"status":"LOADING","symbol":symbol,"message":"Building live market snapshot…"},"data_quality":{"status":"LOADING","reason":"Live snapshot is being refreshed."},"server_time":now}
 
 
 @app.get("/api/options")
@@ -555,7 +577,6 @@ def api_options(symbol: str = "NIFTY50"):
         ingest_position_shift(symbol, spot, payload)
         rows=payload.get("rows") or []
         if rows:
-            # Engine rows are one contract per row (type=CALL/PUT). Do not expect paired CE/PE fields.
             calls=[r for r in rows if str(r.get("type") or "").upper()=="CALL"]
             puts=[r for r in rows if str(r.get("type") or "").upper()=="PUT"]
             co=sum(float(r.get("oi") or 0) for r in calls); po=sum(float(r.get("oi") or 0) for r in puts)
@@ -566,10 +587,3 @@ def api_options(symbol: str = "NIFTY50"):
     except Exception as exc:
         logger.exception("OPTION API ERROR %s", symbol)
         return {"status":"ERROR","signal":"NEUTRAL","confidence":0,"reason":str(exc),"source":"exception","rows":[]}
-
-
-@app.get("/api/futures")
-def api_futures(symbol: str = "NIFTY50"):
-    symbol=canonical_symbol(symbol)
-    if str(symbol).startswith("EQ_"):
-        return {"futures":{"status":"NOT_AVAILABLE","reason":"Cash equity selected; futures contract not selected."},"combined":{"status":"NOT_REQUIRED","view":"CASH EQUITY","action":"TECHNICAL ONLY"}}
