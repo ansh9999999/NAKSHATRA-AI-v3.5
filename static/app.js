@@ -7,8 +7,9 @@ const num=v=>{const n=Number(v);return Number.isFinite(n)?n:null};
 const fmt=(v,d=2)=>{const n=num(v);return n===null?'—':n.toLocaleString('en-IN',{maximumFractionDigits:d})};
 function set(id,v){if($(id))$(id).textContent=v??'—'}
 function paint(id,v){const el=$(id);if(!el)return;const s=String(v||'').toUpperCase();el.classList.remove('bull','bear','wait');if(s.includes('BULL')||s.includes('BUY'))el.classList.add('bull');else if(s.includes('BEAR')||s.includes('SELL'))el.classList.add('bear');else if(s.includes('WAIT')||s.includes('SIDEWAYS')||s.includes('NEUTRAL'))el.classList.add('wait')}
-function selectSymbol(s,name){symbol=String(s).toUpperCase();selectedDisplayName=name||symbol;document.querySelectorAll('.symbol').forEach(b=>b.classList.toggle('active',b.dataset.symbol===symbol));loadAll()}
+function selectSymbol(s,name){symbol=String(s).toUpperCase();selectedDisplayName=name||symbol;document.querySelectorAll('.symbol').forEach(b=>b.classList.toggle('active',b.dataset.symbol===symbol));set('marketSymbol',selectedDisplayName);set('dataState','● LOADING');loadAll()}
 function renderCore(a){
+ if(!a || a.status==='LOADING' || a.status==='ERROR') return;
  const t=a?.ticker||{}, x=a?.analysis||{}; const price=t.ltp??t.price??t.close??x.price; const ch=t.percent_change??t.per_change??t.change;
  set('marketSymbol',selectedDisplayName); set('price',fmt(price)); set('change',ch==null?'—':`${num(ch)>=0?'▲':'▼'} ${fmt(Math.abs(ch))}%`); set('dayChange',ch==null?'—':`${num(ch)>=0?'▲':'▼'} ${fmt(Math.abs(ch))}%`); set('dayChangePct',t.change==null?'—':fmt(t.change)); set('dayHigh',fmt(t.high)); set('dayLow',fmt(t.low)); set('dayVolume',fmt(t.volume,0)); set('openInterest',fmt(t.oi,0));
  set('dataState',a?.status==='OK'?'● LIVE • KOTAK NEO':(a?.status||'LOADING')); paint('dataState',a?.status==='OK'?'BULLISH':'WAIT');
@@ -29,7 +30,7 @@ function renderFutures(d){const f=d?.futures||{},c=d?.combined||{};set('futureSt
 function renderOption(o,price){o=o||{};set('expiry',o.expiry?`Expiry ${o.expiry}`:'Expiry —');set('optionStatus',o.status==='OK'?'● LIVE':'● NO DATA');set('pcrOi',fmt(o.pcr_oi_calc??o.pcr,2));set('pcrVol',fmt(o.pcr_volume_calc??o.volume_pcr,2));set('ceVolume',fmt(o.call_volume,0));set('peVolume',fmt(o.put_volume,0));set('atm',fmt(o.atm_strike,0));set('maxPain',fmt(o.max_pain,0));set('support',fmt(o.max_put_oi_support,0));set('resistance',fmt(o.max_call_oi_resistance,0));set('optionView',o.signal||'SIDEWAYS');set('optionViewReason',o.reason||'NSE option-chain data');set('optionNote',o.status==='OK'?`${o.source||'NSE'} • ${o.row_count||0} rows`:'Option chain unavailable')}
 function renderNse(d){const rows=d?.fii_dii?.rows||[];const fii=rows.find(x=>String(x.category||'').toUpperCase().includes('FII'))||{};const dii=rows.find(x=>String(x.category||'').toUpperCase()==='DII')||{};set('fiiNet',fii.net_cr==null?'—':`${fii.net_cr>=0?'+':''}${fmt(fii.net_cr,0)} Cr`);set('diiNet',dii.net_cr==null?'—':`${dii.net_cr>=0?'+':''}${fmt(dii.net_cr,0)} Cr`);set('indiaVix',fmt(d?.india_vix?.value,2));set('positionSentiment',d?.sentiment?.bias||'—');set('participantStatus',d?.status==='OK'?'● EOD DATA':'● PARTIAL / NO DATA');set('participantReason',d?.sentiment?.note||'NSE participant data is EOD, not live order flow.');}
 async function getJson(url){const r=await fetch(url,{cache:'no-store'});return await r.json()}
-async function load(){try{const d=await getJson(`/api/live?symbol=${encodeURIComponent(symbol)}&_=${Date.now()}`);renderCore(d);if(d?.status==='LOADING')set('dataState','● LIVE • KOTAK NEO');}catch(e){set('dataState','● ERROR')}}
+async function load(){try{const d=await getJson(`/api/live?symbol=${encodeURIComponent(symbol)}&_=${Date.now()}`);if(d?.status==='OK')renderCore(d);else if(d?.status==='LOADING')set('dataState','● REFRESHING • KOTAK NEO');}catch(e){set('dataState','● LAST DATA • CONNECTION RETRYING')}}
 async function loadOptions(){try{renderOption(await getJson(`/api/options?symbol=${encodeURIComponent(symbol)}&_=${Date.now()}`),num($('price')?.textContent?.replaceAll(',','')))}catch(e){set('optionStatus','● ERROR')}}
 async function loadFutures(){try{renderFutures(await getJson(`/api/futures?symbol=${encodeURIComponent(symbol)}&_=${Date.now()}`))}catch(e){set('futureStatus','● ERROR')}}
 async function loadNse(){try{renderNse(await getJson(`/api/nse-intelligence?symbol=${encodeURIComponent(symbol)}&_=${Date.now()}`))}catch(e){set('participantStatus','● ERROR')}}
@@ -55,6 +56,7 @@ async function searchEquitiesUI(q){
 
 async function loadAll(){await load();loadOptions();loadFutures();loadNse();loadShift();loadCatalysts()}
 document.addEventListener('DOMContentLoaded',()=>{
+ document.querySelectorAll('.symbol').forEach(btn=>btn.addEventListener('click',()=>selectSymbol(btn.dataset.symbol,btn.textContent.trim())));
  const es=$('equitySearch'); if(es) es.addEventListener('input',()=>{clearTimeout(equitySearchTimer); equitySearchTimer=setTimeout(()=>searchEquitiesUI(es.value),350)});
  loadAll();setInterval(load,15000);setInterval(loadOptions,30000);setInterval(loadFutures,30000);setInterval(loadNse,120000)});
  
