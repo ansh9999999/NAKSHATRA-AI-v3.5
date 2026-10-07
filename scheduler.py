@@ -3,6 +3,8 @@ NAKSHATRA AI
 Scheduler
 """
 
+import os
+
 from apscheduler.schedulers.background import BackgroundScheduler
 
 from scanner import market_scan
@@ -16,6 +18,14 @@ scheduler = BackgroundScheduler()
 
 def start_scheduler():
 
+    # Render runs the web API in the same process. The market scanner can be
+    # memory/CPU heavy and may cause the web service to be restarted/recovered.
+    # Keep the scheduler opt-in; enable it explicitly when desired.
+    enabled = os.getenv("NAKSHATRA_SCHEDULER_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
+    if not enabled:
+        logger.info("NAKSHATRA background scheduler disabled (set NAKSHATRA_SCHEDULER_ENABLED=true to enable)")
+        return
+
     if scheduler.running:
         logger.info("Scheduler already running")
         return
@@ -26,7 +36,10 @@ def start_scheduler():
         "interval",
         minutes=5,
         id="market_scan",
-        replace_existing=True
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=30,
     )
 
     # Monitor open trades every 1 minute
@@ -35,7 +48,10 @@ def start_scheduler():
         "interval",
         minutes=1,
         id="trade_monitor",
-        replace_existing=True
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=30,
     )
 
     scheduler.start()
