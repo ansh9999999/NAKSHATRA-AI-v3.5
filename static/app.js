@@ -29,34 +29,61 @@ function renderMarketShift(x){x=x||{};set('marketShiftStatus',`● ${x.status||'
 function renderFutures(d){const f=d?.futures||{},c=d?.combined||{};set('futureStatus',`● ${f.status||'NO DATA'}`);set('futureContract',f.contract||'—');set('futurePrice',fmt(f.price));set('futureOi',fmt(f.oi,0));set('futureVolume',fmt(f.volume,0));set('futureBasis',f.basis==null?'—':fmt(f.basis,2));set('futureDoi',f.snapshot_oi_change==null?'WARMING':fmt(f.snapshot_oi_change,0));set('futureBuild',f.buildup||'NO DATA');set('foCompare',c.view||'WAIT');set('foAction',c.action||'WAIT');set('futureNote',f.note||f.reason||'Kotak Neo futures data unavailable.')}
 function renderOption(o,price){o=o||{};set('expiry',o.expiry?`Expiry ${o.expiry}`:'Expiry —');set('optionStatus',o.status==='OK'?'● LIVE':'● NO DATA');set('pcrOi',fmt(o.pcr_oi_calc??o.pcr,2));set('pcrVol',fmt(o.pcr_volume_calc??o.volume_pcr,2));set('ceVolume',fmt(o.call_volume,0));set('peVolume',fmt(o.put_volume,0));set('atm',fmt(o.atm_strike,0));set('maxPain',fmt(o.max_pain,0));set('support',fmt(o.max_put_oi_support,0));set('resistance',fmt(o.max_call_oi_resistance,0));set('optionView',o.signal||'SIDEWAYS');set('optionViewReason',o.reason||'NSE option-chain data');set('optionNote',o.status==='OK'?`${o.source||'NSE'} • ${o.row_count||0} rows`:'Option chain unavailable')}
 function renderNse(d){const rows=d?.fii_dii?.rows||[];const fii=rows.find(x=>String(x.category||'').toUpperCase().includes('FII'))||{};const dii=rows.find(x=>String(x.category||'').toUpperCase()==='DII')||{};set('fiiNet',fii.net_cr==null?'—':`${fii.net_cr>=0?'+':''}${fmt(fii.net_cr,0)} Cr`);set('diiNet',dii.net_cr==null?'—':`${dii.net_cr>=0?'+':''}${fmt(dii.net_cr,0)} Cr`);set('indiaVix',fmt(d?.india_vix?.value,2));set('positionSentiment',d?.sentiment?.bias||'—');set('participantStatus',d?.status==='OK'?'● EOD DATA':'● PARTIAL / NO DATA');set('participantReason',d?.sentiment?.note||'NSE participant data is EOD, not live order flow.');}
-async function getJson(url){const r=await fetch(url,{cache:'no-store'});return await r.json()}
+async function getJson(url,options={}){const r=await fetch(url,{cache:'no-store',...options});return await r.json()}
 async function load(){try{const d=await getJson(`/api/live?symbol=${encodeURIComponent(symbol)}&_=${Date.now()}`);if(d?.status==='OK')renderCore(d);else if(d?.status==='LOADING')set('dataState','● REFRESHING • KOTAK NEO');}catch(e){set('dataState','● LAST DATA • CONNECTION RETRYING')}}
 async function loadOptions(){try{renderOption(await getJson(`/api/options?symbol=${encodeURIComponent(symbol)}&_=${Date.now()}`),num($('price')?.textContent?.replaceAll(',','')))}catch(e){set('optionStatus','● ERROR')}}
 async function loadFutures(){try{renderFutures(await getJson(`/api/futures?symbol=${encodeURIComponent(symbol)}&_=${Date.now()}`))}catch(e){set('futureStatus','● ERROR')}}
 async function loadNse(){try{renderNse(await getJson(`/api/nse-intelligence?symbol=${encodeURIComponent(symbol)}&_=${Date.now()}`))}catch(e){set('participantStatus','● ERROR')}}
-async function loadShift(){try{renderPositionShift(await getJson(`/api/position-shift?symbol=${encodeURIComponent(symbol)}&_=${Date.now()}`));renderMarketShift(await getJson(`/api/market-shift?symbol=${encodeURIComponent(symbol)}&_=${Date.now()}`))}catch(e){}}
-async function loadCatalysts(){try{const d=await getJson(`/api/catalysts?symbol=${encodeURIComponent(symbol)}&_=${Date.now()}`);set('eventRisk',d.items?.length?'NORMAL':'NO DATA');set('eventDisclaimer',d.note||'Verified catalyst feed only.');$('catalyst').innerHTML=(d.items||[]).slice(0,8).map(x=>`<div class="catalyst-row"><strong>${esc(x.title)}</strong><small>${esc(x.effect||'Confirm with live market data.')}</small></div>`).join('')||'<div class="catalyst-row">No verified catalyst available.</div>'}catch(e){}}
+async function loadShift(){try{const [p,m]=await Promise.all([getJson(`/api/position-shift?symbol=${encodeURIComponent(symbol)}&_=${Date.now()}`),getJson(`/api/market-shift?symbol=${encodeURIComponent(symbol)}&_=${Date.now()}`)]);renderPositionShift(p);renderMarketShift(m)}catch(e){}}
+async function loadCatalysts(){try{const d=await getJson(`/api/catalysts?symbol=${encodeURIComponent(symbol)}&_=${Date.now()}`);set('eventRisk',d.items?.length?'NORMAL':'NO DATA');set('eventDisclaimer',d.note||'Verified catalyst feed only.');if($('catalyst'))$('catalyst').innerHTML=(d.items||[]).slice(0,8).map(x=>`<div class="catalyst-row"><strong>${esc(x.title)}</strong><small>${esc(x.effect||'Confirm with live market data.')}</small></div>`).join('')||'<div class="catalyst-row">No verified catalyst available.</div>'}catch(e){}}
 let equitySearchTimer=null;
+let equitySearchSeq=0;
+let equitySearchController=null;
 async function searchEquitiesUI(q){
- const box=$('equityResults'); if(!box)return; q=String(q||'').trim();
+ const box=$('equityResults'); if(!box)return;
+ q=String(q||'').trim();
+ const seq=++equitySearchSeq;
+ if(equitySearchController) equitySearchController.abort();
  if(q.length<2){box.style.display='none';box.innerHTML='';return;}
+ equitySearchController=new AbortController();
  box.style.display='block'; box.innerHTML='<div class="equity-result"><small>Searching…</small></div>';
  try{
-   const d=await getJson(`/api/equity-search?q=${encodeURIComponent(q)}&limit=12&_=${Date.now()}`);
+   const d=await getJson(`/api/equity-search?q=${encodeURIComponent(q)}&limit=12&_=${Date.now()}`,{signal:equitySearchController.signal});
+   if(seq!==equitySearchSeq)return;
+   const current=String($('equitySearch')?.value||'').trim();
+   if(current!==q)return;
    const rows=d?.results||[];
-   box.innerHTML=rows.length?rows.map((r,i)=>`<div class="equity-result" data-i="${i}"><span><b>${esc(r.trading_symbol||r.symbol||'—')}</b><small>${esc(r.name||'')}</small></span><span class="equity-exchange">${esc(r.exchange_segment||'')}</span></div>`).join(''):'<div class="equity-result"><small>No matching equity found.</small></div>';
-   box.querySelectorAll('.equity-result[data-i]').forEach(el=>el.addEventListener('click',async()=>{
+   box.innerHTML=rows.length?rows.map((r,i)=>`<div class="equity-result" data-i="${i}"><span><b>${esc(r.trading_symbol||r.symbol||'—')}</b><small>${esc(r.name||'')}</small></span><span class="equity-exchange">${esc(r.exchange||r.segment||'')}</span></div>`).join(''):'<div class="equity-result"><small>No matching equity found.</small></div>';
+   box.querySelectorAll('.equity-result[data-i]').forEach(el=>el.addEventListener('click',()=>{
       const r=rows[Number(el.dataset.i)]; if(!r)return;
-      try{await getJson(`/api/equity-register?symbol=${encodeURIComponent(r.trading_symbol||r.symbol||'')}&_=${Date.now()}`)}catch(e){}
-      symbol=String(r.symbol||r.trading_symbol||'').toUpperCase(); selectedDisplayName=r.name||r.trading_symbol||symbol;
-      set('marketSymbol',selectedDisplayName); box.style.display='none'; if($('equitySearch'))$('equitySearch').value=''; loadAll();
+      // Search already registers the selected instrument server-side. Do not wait
+      // for a second registration request here; this was causing selection lag.
+      const nextSymbol=String(r.symbol||'').toUpperCase();
+      if(!nextSymbol)return;
+      symbol=nextSymbol;
+      selectedDisplayName=r.name||r.trading_symbol||nextSymbol;
+      document.querySelectorAll('.symbol').forEach(b=>b.classList.remove('active'));
+      set('marketSymbol',selectedDisplayName);
+      set('dataState','● LOADING');
+      box.style.display='none';
+      if($('equitySearch'))$('equitySearch').value='';
+      equitySearchSeq++;
+      if(equitySearchController)equitySearchController.abort();
+      loadAll();
    }));
- }catch(e){box.innerHTML='<div class="equity-result"><small>Search unavailable. Check Kotak Neo connection.</small></div>';}
+ }catch(e){
+   if(e?.name==='AbortError')return;
+   if(seq!==equitySearchSeq)return;
+   box.innerHTML='<div class="equity-result"><small>Search unavailable. Check Kotak Neo connection.</small></div>';
+ }
 }
-
-async function loadAll(){await load();loadOptions();loadFutures();loadNse();loadShift();loadCatalysts()}
+async function loadAll(){
+ const tasks=[load(),loadOptions(),loadFutures(),loadNse(),loadShift(),loadCatalysts()];
+ await Promise.allSettled(tasks);
+}
 document.addEventListener('DOMContentLoaded',()=>{
  document.querySelectorAll('.symbol').forEach(btn=>btn.addEventListener('click',()=>selectSymbol(btn.dataset.symbol,btn.textContent.trim())));
- const es=$('equitySearch'); if(es) es.addEventListener('input',()=>{clearTimeout(equitySearchTimer); equitySearchTimer=setTimeout(()=>searchEquitiesUI(es.value),350)});
- loadAll();setInterval(load,15000);setInterval(loadOptions,30000);setInterval(loadFutures,30000);setInterval(loadNse,120000)});
- 
+ const es=$('equitySearch');
+ if(es) es.addEventListener('input',()=>{clearTimeout(equitySearchTimer);equitySearchTimer=setTimeout(()=>searchEquitiesUI(es.value),220)});
+ loadAll();setInterval(load,15000);setInterval(loadOptions,30000);setInterval(loadFutures,30000);setInterval(loadNse,120000);
+});
