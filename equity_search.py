@@ -11,7 +11,6 @@ import re
 import threading
 import io
 import time
-from collections import deque
 from typing import Any
 
 import pandas as pd
@@ -29,8 +28,6 @@ _SEARCH_CACHE: dict[tuple[str, int], tuple[float, dict[str, Any]]] = {}
 _SEARCH_CACHE_TTL = 30.0
 _REGISTER_CACHE: dict[str, str] = {}
 _REGISTER_LOCK = threading.Lock()
-_REGISTER_ORDER = deque()
-_MAX_DYNAMIC_MARKETS = 24
 
 
 def _urls_from_response(response: Any) -> list[str]:
@@ -274,19 +271,6 @@ def _register(row: dict[str, Any]) -> str:
         MARKETS[internal] = market
         _TOKEN_CACHE[internal] = {"time": time.time(), "record": market["instrument_record"]}
         _REGISTER_CACHE[cache_key] = internal
-        if internal not in _REGISTER_ORDER:
-            _REGISTER_ORDER.append(internal)
-        while len(_REGISTER_ORDER) > _MAX_DYNAMIC_MARKETS:
-            old_internal = _REGISTER_ORDER.popleft()
-            if old_internal == internal:
-                continue
-            old_market = MARKETS.get(old_internal)
-            if old_market and old_market.get("dynamic_equity"):
-                MARKETS.pop(old_internal, None)
-                _TOKEN_CACHE.pop(old_internal, None)
-                for k,v in list(_REGISTER_CACHE.items()):
-                    if v == old_internal:
-                        _REGISTER_CACHE.pop(k, None)
     return internal
 
 
@@ -363,6 +347,28 @@ def register(symbol: str) -> dict[str, Any] | None:
             "name": str(market.get("name") or market.get("display") or ""),
             "instrument_type": str(market.get("instrument_record", {}).get("instrument_type") or "EQ"),
         }
+
+    # Browser tabs can survive a Render restart. In that case an old EQ_*
+    # symbol may no longer exist in this process' in-memory registry. Rebuild
+    # the stable instrument identity from EQ_<segment>_<trading>_<token>.
+    # This avoids sending the dynamic equity into the Delta crypto fallback.
+    if value.startswith("EQ_") and value not in MARKETS:
+        parts = value.split("_")
+        if len(parts) >= 4:
+            seg = parts[1].lower() + "_" + parts[2].lower()
+            token = parts[-1]
+            trading = "_".join(parts[3:-1])
+            if seg in {"nse_cm", "bse_cm"} and token.isdigit() and trading:
+                trading = trading.upper()
+                row = {
+                    "token": token,
+                    "exchange_segment": seg,
+                    "trading_symbol": trading,
+                    "name": trading,
+                    "instrument_type": "EQ",
+                }
+                internal = _register(row)
+                return {"symbol": internal, **row}
 
     # Fast exact lookup from the already loaded universe.
     for row in _UNIVERSE:
