@@ -26,7 +26,6 @@ from database.database import initialize_database
 from database.models import get_all_trades, get_open_trades
 from history import get_multi_timeframe_history
 from analysis.signal import generate_signal
-from scanner import market_scan
 from market_registry import canonical_symbol, symbols
 from kotak_neo import get_quote
 from futures_intelligence import get_futures_intelligence, combine_futures_options
@@ -56,6 +55,15 @@ _live_jobs = set()
 _live_lock = threading.Lock()
 _live_executor = ThreadPoolExecutor(max_workers=1)
 _LIVE_CACHE_TTL = 60
+_MAX_ANALYSIS_CACHE = 8
+_MAX_TIMEFRAME_CACHE = 8
+_MAX_LIVE_CACHE = 6
+
+def _bounded_put(cache, key, value, limit):
+    cache.pop(key, None)
+    cache[key] = value
+    while len(cache) > limit:
+        cache.pop(next(iter(cache)), None)
 
 
 def _json_safe(value):
@@ -110,14 +118,28 @@ def run_analysis(symbol: str, force=False):
                 ),
                 "server_time": time.time(),
             }
-            _analysis_cache[symbol] = {
+            _bounded_put(_analysis_cache, symbol, {
                 "time": time.time(),
                 "result": result,
-            }
+            }, _MAX_ANALYSIS_CACHE)
             return result
 
         data["symbol"] = symbol
         result = generate_signal(data)
+        if isinstance(result, dict):
+            # Build dashboard timeframe labels from the same candles already
+            # fetched for this analysis; do not refetch them later.
+            derived = {}
+            for tf in ("5m","15m","1h","1d","1w"):
+                if tf in data and data[tf] is not None and not data[tf].empty:
+                    derived[tf] = _trend_from_close(data[tf])
+            if "1w" not in derived and data.get("1d") is not None and len(data["1d"]) >= 10:
+                x = data["1d"].copy().reset_index(drop=True)
+                x["grp"] = x.index // 5
+                w = x.groupby("grp").agg({"close":"last"})
+                derived["1w"] = _trend_from_close(w)
+                derived["1w"]["source"] = "derived from 1D candles (5 trading sessions)"
+            result["derived_timeframes"] = derived
         result = _json_safe(result)
 
         if isinstance(result, dict):
@@ -126,10 +148,10 @@ def run_analysis(symbol: str, force=False):
                 (time.time() - started) * 1000
             )
 
-        _analysis_cache[symbol] = {
+        _bounded_put(_analysis_cache, symbol, {
             "time": time.time(),
             "result": result,
-        }
+        }, _MAX_ANALYSIS_CACHE)
         return result
 
     except Exception as exc:
@@ -142,10 +164,10 @@ def run_analysis(symbol: str, force=False):
                 (time.time() - started) * 1000
             ),
         }
-        _analysis_cache[symbol] = {
+        _bounded_put(_analysis_cache, symbol, {
             "time": time.time(),
             "result": result,
-        }
+        }, _MAX_ANALYSIS_CACHE)
         return result
 
 
@@ -244,7 +266,7 @@ def _enrich_timeframes(symbol,analysis):
             x=data["1d"].copy().reset_index(drop=True); x["grp"]=x.index//5
             w=x.groupby("grp").agg({"close":"last"}); d["1w"]=_trend_from_close(w)
             d["1w"]["source"]="derived from 1D candles (5 trading sessions)"
-        _timeframe_cache[symbol]={"time":now,"data":d}
+        _bounded_put(_timeframe_cache, symbol, {"time":now,"data":d}, _MAX_TIMEFRAME_CACHE)
         analysis["derived_timeframes"]=d
     except Exception as e:
         analysis["derived_timeframes_error"]=str(e)
@@ -370,18 +392,22 @@ def api_catalysts(symbol: str = "NIFTY50"):
 def _build_live_payload(symbol: str = "BTCUSD", force: bool = False):
     symbol = canonical_symbol(symbol)
     analysis = run_analysis(symbol, force=force)
-    analysis = _enrich_timeframes(symbol, analysis)
+    # Avoid a second complete MTF history fetch here. run_analysis already
+    # consumed the same cached candles.
     ticker = _get_market_quote(symbol)
-    market_shift = detect_market_shift(symbol)
+    if symbol in ("NIFTY50", "BANKNIFTY", "SENSEX", "NIFTYIT"):
+        market_shift = detect_market_shift(symbol)
+    else:
+        market_shift = {"status":"NOT_REQUIRED","symbol":symbol,"bias":"WAIT","strength":0,"phase":"NOT_APPLICABLE","action":"WAIT"}
 
-    # v2.10 data-quality gate for index decisions. A strong directional call
-    # is not allowed when the option chain or positioning sentiment is absent.
+    # Reuse the option chain already produced by generate_signal when available.
     quality = {"status": "NOT_REQUIRED"}
-    oc = None
+    oc = analysis.get("option_chain") if isinstance(analysis, dict) else None
     if symbol in ("NIFTY50", "BANKNIFTY") and isinstance(analysis, dict):
         try:
             spot = (ticker or {}).get("ltp") or (ticker or {}).get("price") or (ticker or {}).get("close")
-            oc = analyze_option_chain(symbol, spot_price=spot)
+            if not isinstance(oc, dict) or oc.get("status") != "OK":
+                oc = analyze_option_chain(symbol, spot_price=spot)
             ingest_position_shift(symbol, spot, oc)
             intel = get_nse_intelligence(symbol)
             sent = (intel or {}).get("sentiment", {})
@@ -452,11 +478,11 @@ def _refresh_live_background(symbol: str):
     try:
         payload = _build_live_payload(symbol, force=False)
         with _live_lock:
-            _live_cache[symbol] = {"time": time.time(), "payload": payload}
+            _bounded_put(_live_cache, symbol, {"time": time.time(), "payload": payload}, _MAX_LIVE_CACHE)
     except Exception as exc:
         logger.exception("LIVE BACKGROUND REFRESH ERROR %s", symbol)
         with _live_lock:
-            _live_cache[symbol] = {
+            _bounded_put(_live_cache, symbol, {
                 "time": time.time(),
                 "payload": {
                     "status": "ERROR",
@@ -466,11 +492,25 @@ def _refresh_live_background(symbol: str):
                     "data_quality": {"status": "DATA RISK", "reason": str(exc)},
                     "server_time": time.time(),
                 },
-            }
+            }, _MAX_LIVE_CACHE)
     finally:
         with _live_lock:
             _live_jobs.discard(symbol)
 
+
+@app.get("/api/quote")
+def api_quote(symbol: str = "NIFTY50"):
+    symbol = canonical_symbol(symbol)
+    try:
+        ticker = _get_market_quote(symbol) or {}
+        return _json_safe({
+            "status": "OK" if ticker else "NO DATA",
+            "symbol": symbol,
+            "ticker": ticker,
+            "server_time": time.time(),
+        })
+    except Exception as exc:
+        return {"status":"ERROR","symbol":symbol,"ticker":None,"error":str(exc),"server_time":time.time()}
 
 @app.get("/api/live")
 def api_live(symbol: str = "BTCUSD", force: bool = False):
@@ -485,9 +525,25 @@ def api_live(symbol: str = "BTCUSD", force: bool = False):
             _live_jobs.add(symbol)
             _live_executor.submit(_refresh_live_background, symbol)
 
-    # IMPORTANT: do not call Kotak here. This response must be fast even when
-    # Kotak historical/option endpoints are rate-limited or slow. The browser
-    # polls again and receives the completed snapshot from _live_cache.
+    # If a recent analysis exists, return it immediately with a fresh quote
+    # while the richer aggregate snapshot refreshes in the background.
+    ac = _analysis_cache.get(symbol)
+    if ac and now - ac["time"] < CACHE_TTL:
+        try:
+            ticker = _get_market_quote(symbol) or {}
+            return _json_safe({
+                "status":"OK",
+                "symbol":symbol,
+                "ticker":ticker,
+                "analysis":ac["result"],
+                "data_quality":ac["result"].get("data_quality", {"status":"CACHED"}) if isinstance(ac["result"],dict) else {"status":"CACHED"},
+                "server_time":now,
+                "note":"Recent analysis cache; richer live snapshot is refreshing.",
+            })
+        except Exception:
+            pass
+
+    # Never perform historical/option work synchronously in this endpoint.
     return {
         "status": "LOADING",
         "symbol": symbol,
