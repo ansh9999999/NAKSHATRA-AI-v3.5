@@ -11,6 +11,7 @@ import re
 import threading
 import io
 import time
+from collections import deque
 from typing import Any
 
 import pandas as pd
@@ -28,6 +29,8 @@ _SEARCH_CACHE: dict[tuple[str, int], tuple[float, dict[str, Any]]] = {}
 _SEARCH_CACHE_TTL = 30.0
 _REGISTER_CACHE: dict[str, str] = {}
 _REGISTER_LOCK = threading.Lock()
+_REGISTER_ORDER = deque()
+_MAX_DYNAMIC_MARKETS = 24
 
 
 def _urls_from_response(response: Any) -> list[str]:
@@ -271,6 +274,19 @@ def _register(row: dict[str, Any]) -> str:
         MARKETS[internal] = market
         _TOKEN_CACHE[internal] = {"time": time.time(), "record": market["instrument_record"]}
         _REGISTER_CACHE[cache_key] = internal
+        if internal not in _REGISTER_ORDER:
+            _REGISTER_ORDER.append(internal)
+        while len(_REGISTER_ORDER) > _MAX_DYNAMIC_MARKETS:
+            old_internal = _REGISTER_ORDER.popleft()
+            if old_internal == internal:
+                continue
+            old_market = MARKETS.get(old_internal)
+            if old_market and old_market.get("dynamic_equity"):
+                MARKETS.pop(old_internal, None)
+                _TOKEN_CACHE.pop(old_internal, None)
+                for k,v in list(_REGISTER_CACHE.items()):
+                    if v == old_internal:
+                        _REGISTER_CACHE.pop(k, None)
     return internal
 
 
