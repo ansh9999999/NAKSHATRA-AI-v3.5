@@ -130,7 +130,7 @@ def _delta(symbol,spot):
     return _analyze_rows(symbol,rows,spot,expiry.strftime("%d-%m-%Y"),"Delta")
 
 def analyze_option_chain(symbol="BTCUSD",spot_price=None):
-    symbol=canonical_symbol(symbol); market=get_market(symbol); key=(symbol,round(_num(spot_price),2)); now=time.time()
+    symbol=canonical_symbol(symbol); market=get_market(symbol); key=symbol; now=time.time()
     with _LOCK:
         h=_CACHE.get(key)
         if h and now-h[0]<TTL:return h[1]
@@ -148,5 +148,9 @@ def analyze_option_chain(symbol="BTCUSD",spot_price=None):
                 else:result=_no_data("All option-chain providers returned no usable CE/PE rows","none",diagnostics=diagnostics)
     elif market and market.get("provider")=="kotak_neo":result=_no_data("Option chain is enabled only for NIFTY/BANKNIFTY in this build","none")
     else:result=_delta(symbol,spot_price)
-    with _LOCK:_CACHE[key]=(now,result)
+    with _LOCK:
+        _CACHE[key]=(now,result)
+        while len(_CACHE) > 8:
+            oldest=min(_CACHE, key=lambda k: _CACHE[k][0])
+            _CACHE.pop(oldest, None)
     return result
