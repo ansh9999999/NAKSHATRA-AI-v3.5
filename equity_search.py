@@ -26,6 +26,8 @@ _UNIVERSE_TIME = 0.0
 _UNIVERSE_TTL = 6 * 60 * 60
 _SEARCH_CACHE: dict[tuple[str, int], tuple[float, dict[str, Any]]] = {}
 _SEARCH_CACHE_TTL = 30.0
+_REGISTER_CACHE: dict[str, str] = {}
+_REGISTER_LOCK = threading.Lock()
 
 
 def _urls_from_response(response: Any) -> list[str]:
@@ -232,9 +234,14 @@ def _load_universe(force: bool = False) -> list[dict[str, Any]]:
 
 
 def _register(row: dict[str, Any]) -> str:
-    token = row["token"]
-    seg = row["exchange_segment"]
-    trading = row["trading_symbol"]
+    token = str(row["token"])
+    seg = str(row["exchange_segment"]).lower()
+    trading = str(row["trading_symbol"]).strip()
+    cache_key = f"{seg}:{trading.upper()}:{token}"
+    with _REGISTER_LOCK:
+        cached_internal = _REGISTER_CACHE.get(cache_key)
+        if cached_internal and cached_internal in MARKETS:
+            return cached_internal
     # Stable internal symbol. It is deliberately not the broker trading symbol
     # so aliases/canonicalization cannot collide with existing index symbols.
     safe_token = re.sub(r"[^A-Za-z0-9]", "_", token)
@@ -260,8 +267,10 @@ def _register(row: dict[str, Any]) -> str:
             "instrument_type": row.get("instrument_type") or "EQ",
         },
     }
-    MARKETS[internal] = market
-    _TOKEN_CACHE[internal] = {"time": time.time(), "record": market["instrument_record"]}
+    with _REGISTER_LOCK:
+        MARKETS[internal] = market
+        _TOKEN_CACHE[internal] = {"time": time.time(), "record": market["instrument_record"]}
+        _REGISTER_CACHE[cache_key] = internal
     return internal
 
 
@@ -323,8 +332,38 @@ def search(query: str, limit: int = 12) -> dict[str, Any]:
     return payload
 
 def register(symbol: str) -> dict[str, Any] | None:
+    value = str(symbol or "").strip().upper()
+    if not value:
+        return None
+
+    # If the caller already has our internal symbol, return it immediately.
+    if value in MARKETS and MARKETS[value].get("dynamic_equity"):
+        market = MARKETS[value]
+        return {
+            "symbol": value,
+            "token": str(market.get("instrument_token") or ""),
+            "exchange_segment": str(market.get("neo_exchange_segment") or ""),
+            "trading_symbol": str(market.get("data_symbol") or market.get("display") or ""),
+            "name": str(market.get("name") or market.get("display") or ""),
+            "instrument_type": str(market.get("instrument_record", {}).get("instrument_type") or "EQ"),
+        }
+
+    # Fast exact lookup from the already loaded universe.
+    for row in _UNIVERSE:
+        if str(row.get("trading_symbol") or "").upper() == value:
+            internal = _register(row)
+            return {"symbol": internal, **row}
+
+    # Avoid forcing a 22k-row ScripMaster download if Kotak search_scrip can
+    # resolve the requested equity directly.
+    direct = _search_scrip_direct(value, 1)
+    for row in direct:
+        if str(row.get("trading_symbol") or "").upper() == value:
+            internal = _register(row)
+            return {"symbol": internal, **row}
+
     for row in _load_universe():
-        if row["trading_symbol"].upper() == str(symbol or "").upper():
+        if str(row.get("trading_symbol") or "").upper() == value:
             internal = _register(row)
             return {"symbol": internal, **row}
     return None
