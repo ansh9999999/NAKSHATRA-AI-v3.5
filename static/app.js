@@ -10,7 +10,7 @@ const esc=v=>String(v??'—').replaceAll('&','&amp;').replaceAll('<','&lt;').rep
 const num=v=>{const n=Number(v);return Number.isFinite(n)?n:null};
 const fmt=(v,d=2)=>{const n=num(v);return n===null?'—':n.toLocaleString('en-IN',{maximumFractionDigits:d})};
 function set(id,v){if($(id))$(id).textContent=v??'—'}
-function paint(id,v){const el=$(id);if(!el)return;const s=String(v||'').toUpperCase();el.classList.remove('bull','bear','wait');if(s.includes('BULL')||s.includes('BUY'))el.classList.add('bull');else if(s.includes('BEAR')||s.includes('SELL'))el.classList.add('bear');else if(s.includes('WAIT')||s.includes('SIDEWAYS')||s.includes('NEUTRAL'))el.classList.add('wait')}
+function paint(id,v){const el=$(id);if(!el)return;const s=String(v||'').toUpperCase();el.classList.remove('bull','bear','wait','sideways');if(s.includes('SIDEWAYS')||s.includes('SIDEWAY')||s.includes('RANGE-BOUND'))el.classList.add('sideways');else if(s.includes('BULL')||s.includes('BUY'))el.classList.add('bull');else if(s.includes('BEAR')||s.includes('SELL'))el.classList.add('bear');else if(s.includes('WAIT')||s.includes('NEUTRAL'))el.classList.add('wait')}
 function isCurrent(gen, expected){return gen===requestGeneration && (!expected || String(expected).toUpperCase()===String(symbol).toUpperCase())}
 async function getJson(url,options={}){const r=await fetch(url,{cache:'no-store',...options});let d;try{d=await r.json()}catch{throw new Error(`HTTP ${r.status}`)};if(!r.ok)throw new Error(d?.error||`HTTP ${r.status}`);return d}
 
