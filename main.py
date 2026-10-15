@@ -35,6 +35,7 @@ from nse_intelligence import get_nse_intelligence
 from position_shift_engine import ingest as ingest_position_shift, analyze as analyze_position_shift
 from market_shift_engine import detect_market_shift
 from equity_search import search as search_equities, register as register_equity
+from global_market.router import router as global_market_router
 
 try:
     from delta import get_ticker as delta_get_ticker
@@ -216,6 +217,8 @@ app = FastAPI(
     version="5.22",
     lifespan=lifespan,
 )
+
+app.include_router(global_market_router)
 
 templates = Jinja2Templates(directory="templates")
 app.mount(
