@@ -5,6 +5,7 @@
 <title>NAKSHATRA AI • Indian Market</title>
 <link rel="stylesheet" href="/static/style.css?v=7.0.0">
 <link rel="stylesheet" href="/static/colorful-theme.css?v=2.0.0">
+<link rel="stylesheet" href="/static/global-market.css?v=1.0.0">
 </head>
 <body><div class="container">
 <header class="topbar">
@@ -33,6 +34,19 @@
 #equitySearch{width:100%;box-sizing:border-box;border:1px solid rgba(90,180,255,.35);border-radius:10px;background:#06172b;color:#fff;padding:11px 12px;font-size:14px;outline:none}
 .equity-results{display:none;margin-top:7px;max-height:260px;overflow:auto}.equity-result{display:flex;justify-content:space-between;gap:8px;padding:10px;border-top:1px solid rgba(255,255,255,.07);cursor:pointer}.equity-result:hover{background:rgba(40,150,220,.12)}.equity-result b{display:block}.equity-result small{opacity:.7}.equity-exchange{font-size:11px;padding:3px 6px;border-radius:7px;background:#102b42;color:#78dcff;align-self:center}
 </style>
+
+
+<section class="card global-market-panel" id="globalMarketPanel">
+ <div class="section-head"><div><span class="eyebrow">WORLDWIDE EXCHANGES</span><h2>🌐 Global Market Intelligence</h2><small>Independent global feeds · Delta engine unchanged</small></div><button class="refresh" id="globalMarketRefresh">↻ Refresh Global</button></div>
+ <div class="global-market-status"><span class="gm-dot"></span><span id="globalMarketStatus">Connecting to public exchange APIs…</span><span id="globalMarketUpdated"></span></div>
+ <div id="globalMarketCards" class="global-market-cards"><div class="gm-empty">Loading Binance, Coinbase, Kraken and futures feeds…</div></div>
+ <div class="gm-subgrid">
+  <div class="gm-box"><div class="section-head"><div><h3>📈 Futures Pressure</h3><small>Open Interest + funding</small></div></div><div id="globalDerivatives" class="gm-table">Waiting for data…</div></div>
+  <div class="gm-box"><div class="section-head"><div><h3>📚 Live Order Book</h3><small>Snapshot depth, not guaranteed liquidity</small></div><select id="globalBookExchange"><option value="binance">Binance Spot</option><option value="bybit">Bybit Perpetual</option></select></div><div id="globalOrderBook" class="gm-orderbook">Waiting for data…</div></div>
+ </div>
+ <div class="gm-box gm-move-box"><div class="section-head"><div><h3>⚡ Sudden Move Monitor</h3><small>Rule-based volatility/volume alerts, not guaranteed predictions</small></div><select id="globalInterval"><option>1m</option><option selected>5m</option><option>15m</option><option>1h</option><option>4h</option><option>1d</option></select></div><div id="globalMoveAlert" class="gm-alert">Waiting for candle history…</div></div>
+ <p class="gm-disclaimer">Public exchange data can be rate-limited or unavailable by region. Spot and perpetual markets are compared separately. This module does not place orders and does not alter Delta signals.</p>
+</section>
 
 <section class="hero-grid-main">
   <section class="card market-hero">
@@ -93,6 +107,6 @@
 </aside>
 </main>
 <footer><span>NAKSHATRA AI • Indian Market • Kotak Neo</span><span>Auto refresh 10s</span></footer>
-</div><script src="/static/app.js?v=8.0.0"></script></body></html>
+</div><script src="/static/app.js?v=8.0.0"></script><script src="/static/global-market.js?v=1.0.0"></script></body></html>
 
                                                                                                                                                    
