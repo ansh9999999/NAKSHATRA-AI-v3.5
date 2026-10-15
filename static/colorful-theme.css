@@ -118,3 +118,79 @@ html,body{
   .topbar h1{font-size:21px}
   .card{border-radius:13px}
 }
+
+
+/* V2: stronger, consistent market-state colors and larger readable typography */
+:root{
+  --bullish:#18f0a0;
+  --bearish:#ff405f;
+  --sideways:#ff9f1c;
+  --muted-readable:#c0cbe0;
+}
+body{font-size:16px!important;color:#f5f7ff}
+.container{font-size:16px}
+.card, .card p, .card small, .card label, .card .muted,
+.subline, #updateStatus, .section-head small, .eyebrow,
+.market-row small, .price-line small, .tf-strip small,
+.plan-grid small, .metrics span, .analysis-rows span,
+.factor-list span, .trend-list span, .gamma-trigger,
+#shiftNote, #marketShiftNote, #optionNote, #futureNote,
+#participantReason, .equity-search-head small, .equity-result small,
+footer, .muted{
+  color:var(--muted-readable)!important;
+  font-size:14px!important;
+  line-height:1.5;
+}
+.card h2{font-size:19px!important;line-height:1.35}
+.card h3{font-size:16px!important}
+.card b,.card strong,.metrics b,.plan-grid b,.trend-list b,
+.tf-strip b,.market-row b,.day-change b,.option-overview b,
+.participant-grid b,.future-grid b,.fo-compare b,.gamma-main b{
+  font-size:18px;
+  line-height:1.4;
+  font-variant-numeric:tabular-nums;
+}
+.price{font-size:clamp(28px,3.5vw,38px)!important;font-weight:800}
+#decision{font-size:30px!important;font-weight:900;letter-spacing:.4px}
+#confidence,#agreementMini{font-size:14px!important;color:#d7e1f5!important}
+#price,#dayChange,#dayChangePct,#dayHigh,#dayLow,#dayVolume,#openInterest,
+#pcrOi,#pcrVol,#ceVolume,#peVolume,#atm,#maxPain,#support,#resistance,
+#futurePrice,#futureOi,#futureVolume,#fiiNet,#diiNet,#indiaVix{
+  font-size:19px!important;font-weight:750;
+}
+input,select,button{font-size:15px!important}
+button{font-weight:700}
+table{font-size:14px!important}
+th{font-size:13px!important;color:#c0cbe0!important}
+td{font-size:14px!important;color:#f0f4ff}
+.card .bull,.bull,[data-market-state="bullish"]{
+  color:var(--bullish)!important;
+}
+.card .bear,.bear,[data-market-state="bearish"]{
+  color:var(--bearish)!important;
+}
+.card .sideways,.sideways,[data-market-state="sideways"]{
+  color:var(--sideways)!important;
+}
+.card .wait,.wait,[data-market-state="wait"]{
+  color:#ffd166!important;
+}
+/* Distinct semantic borders/glows make each market state visible at a glance */
+.bull{ text-shadow:0 0 12px rgba(24,240,160,.12) }
+.bear{ text-shadow:0 0 12px rgba(255,64,95,.12) }
+.sideways{ text-shadow:0 0 12px rgba(255,159,28,.14) }
+.decision-card:has(#decision.bull){border-color:rgba(24,240,160,.72);box-shadow:0 0 22px rgba(24,240,160,.08)}
+.decision-card:has(#decision.bear){border-color:rgba(255,64,95,.72);box-shadow:0 0 22px rgba(255,64,95,.08)}
+.decision-card:has(#decision.sideways){border-color:rgba(255,159,28,.72);box-shadow:0 0 22px rgba(255,159,28,.08)}
+@media(max-width:700px){
+ .card, .card p, .card small, .card label, .card .muted,
+ .subline, #updateStatus, .section-head small, .eyebrow,
+ .market-row small, .price-line small, .tf-strip small,
+ .plan-grid small, .metrics span, .analysis-rows span,
+ .factor-list span, .trend-list span, .gamma-trigger,
+ #shiftNote, #marketShiftNote, #optionNote, #futureNote,
+ #participantReason, footer, .muted{font-size:13px!important}
+ .card b,.card strong,.metrics b,.plan-grid b,.trend-list b,
+ .tf-strip b,.market-row b,.day-change b{font-size:16px}
+ #decision{font-size:26px!important}
+}
