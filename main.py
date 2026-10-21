@@ -447,7 +447,7 @@ def api_catalysts(symbol: str = "NIFTY50"):
         return {"status":"ERROR","symbol":symbol,"items":[],"error":str(exc)}
 
 
-def _build_live_payload(symbol: str = "BTCUSD", force: bool = False):
+def _build_live_payload(symbol: str = "NIFTY50", force: bool = False):
     symbol = canonical_symbol(symbol)
     analysis = run_analysis(symbol, force=force)
     analysis = _enrich_timeframes(symbol, analysis)
@@ -555,7 +555,7 @@ def _refresh_live_background(symbol: str):
 
 
 @app.get("/api/live")
-def api_live(symbol: str = "BTCUSD", force: bool = False):
+def api_live(symbol: str = "NIFTY50", force: bool = False):
     symbol = canonical_symbol(symbol)
     now = time.time()
     with _live_lock:
